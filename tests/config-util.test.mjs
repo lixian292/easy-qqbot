@@ -8,6 +8,8 @@ import { DEFAULT_CONFIG, normalizeConfig, patchConfig, publicConfig, hasCredenti
 import { createPaths } from '../host/paths.js'
 import {
   chunkText,
+  cleanQqText,
+  describeImageMarker,
   estimateTokens,
   maskSecret,
   normalizeTags,
@@ -105,6 +107,25 @@ test('parseCommand recognizes prefixes', () => {
   assert.deepEqual(parseCommand('/help'), { name: 'help', args: '', raw: '/help' })
   assert.equal(parseCommand('普通消息'), undefined)
   assert.equal(parseCommand('#'), undefined)
+})
+
+test('cleanQqText turns QQ face markup into readable markers', () => {
+  const cleaned = cleanQqText('<faceType=6,faceId="0",ext="eyJ0ZXh0IjoiIn0="> [图片]')
+  assert.equal(cleaned, '[QQ表情 0] [图片]')
+  assert.equal(cleanQqText('<faceType=6,faceId="0"> hi'), '[QQ表情 0] hi')
+})
+
+test('cleanQqText strips unknown tags and decodes entities', () => {
+  assert.equal(cleanQqText('<at id="1">小明</at> 你好 &amp; 再见'), '小明 你好 & 再见')
+  assert.equal(cleanQqText('<rps type="1"/> 石头剪刀布'), '[QQ表情] 石头剪刀布')
+  assert.equal(cleanQqText('  多  空格 \n\n\n 文本  '), '多 空格\n\n文本')
+  assert.equal(cleanQqText('https://example.com/a?x=1&y=2'), 'https://example.com/a?x=1&y=2')
+})
+
+test('describeImageMarker adds size and media type for the text model', () => {
+  assert.equal(describeImageMarker({ width: 800, height: 600, contentType: 'image/jpeg' }), '[图片 800×600 image/jpeg]')
+  assert.equal(describeImageMarker({ filename: 'sticker.gif' }), '[图片 gif]')
+  assert.equal(describeImageMarker({}), '[图片]')
 })
 
 test('createPaths keeps data inside the package by default and maps layers', () => {

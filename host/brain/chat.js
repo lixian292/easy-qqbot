@@ -19,7 +19,7 @@
  * answered with a short Chinese fallback.
  */
 import { buildMessages, buildSystemPrompt } from './prompt.js'
-import { clampText, isLikelyImageContentType, parseStickerDirectives, stripMarkdown } from '../util/text.js'
+import { clampText, describeImageMarker, isLikelyImageContentType, parseStickerDirectives, stripMarkdown } from '../util/text.js'
 
 const ERROR_FALLBACK = '我这边刚刚走神了，再说一次？'
 const EMPTY_REPLY_FALLBACK = '嗯嗯～'
@@ -189,11 +189,16 @@ export function createChatEngine({
     }
   }
 
+  /** Image attachments of an inbound message (ignores files/voice/etc.). */
+  function inboundImages(inbound) {
+    const attachments = Array.isArray(inbound?.attachments) ? inbound.attachments : []
+    return attachments.filter((attachment) => isImageAttachment(attachment))
+  }
+
   /** Fire sticker capture for inbound images; failures are only logged. */
   function captureInboundImages(inbound, config) {
     if (config.stickers?.enabled !== true || config.stickers?.captureIncoming !== true) return
-    const attachments = Array.isArray(inbound.attachments) ? inbound.attachments : []
-    const images = attachments.filter((attachment) => isImageAttachment(attachment))
+    const images = inboundImages(inbound)
     if (images.length === 0) return
     if (typeof captureIncomingImage !== 'function') return
     for (const attachment of images) {
@@ -203,9 +208,22 @@ export function createChatEngine({
     }
   }
 
-  function countInboundImages(inbound) {
-    const attachments = Array.isArray(inbound?.attachments) ? inbound.attachments : []
-    return attachments.filter((attachment) => isImageAttachment(attachment)).length
+  /**
+   * Content persisted to memory and shown to the model. QQ only hands the bot a
+   * text placeholder for images (and protocol markup for faces), so make the
+   * image facts explicit: the text model still cannot see pixels, but it can
+   * acknowledge what arrived instead of guessing from a bare "[图片]".
+   */
+  function buildInboundContent(inbound) {
+    const rawText = String(inbound?.text ?? '').trim()
+    const images = inboundImages(inbound)
+    if (images.length === 0) return rawText
+    const markers = images.map((attachment) => describeImageMarker(attachment)).join(' ')
+    const withoutPlaceholder = rawText
+      .replace(/\[图片\]/g, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim()
+    return withoutPlaceholder === '' ? markers : `${withoutPlaceholder} ${markers}`
   }
 
   async function handleBudgetBlocked(inbound, chatId, config, content) {
@@ -298,11 +316,9 @@ export function createChatEngine({
       }
     }
 
-    // 2. Inbound images: capture into the sticker candidate library + marker.
+    // 2. Inbound images: capture into the sticker candidate library + explicit marker.
     captureInboundImages(inbound, config)
-    const imageCount = countInboundImages(inbound)
-    const rawText = String(inbound?.text ?? '').trim()
-    const content = imageCount > 0 ? (rawText === '' ? '[图片]' : `${rawText} [图片]`) : rawText
+    const content = buildInboundContent(inbound)
 
     // 3. Budget gate.
     if (typeof budgetStore?.check === 'function') {

@@ -335,7 +335,7 @@ test('会话级 stickerChance=0 时不自动配表情', async () => {
   }
 })
 
-test('入站图片：触发 captureIncomingImage 并在用户消息中标记 [图片]', async () => {
+test('入站图片：触发 captureIncomingImage 并在用户消息中标记图片信息', async () => {
   const captured = []
   const { engine, llm, memoryStore, cleanup } = await setup({
     captureIncomingImage: async (attachment, inbound) => {
@@ -356,9 +356,9 @@ test('入站图片：触发 captureIncomingImage 并在用户消息中标记 [�
 
     const lastUser = llm.calls[0].messages[llm.calls[0].messages.length - 1]
     assert.equal(lastUser.role, 'user')
-    assert.equal(lastUser.content, '[图片]')
+    assert.equal(lastUser.content, '[图片 image/png]')
     const chat = await memoryStore.getChat('c2c_u1')
-    assert.equal(chat.history[0].content, '[图片]')
+    assert.equal(chat.history[0].content, '[图片 image/png]')
   } finally {
     await cleanup()
   }

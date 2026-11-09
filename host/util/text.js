@@ -174,3 +174,84 @@ export function isLikelyImageContentType(contentType) {
   const value = String(contentType ?? '').toLowerCase()
   return value.startsWith('image/') || value === 'sticker'
 }
+
+function safeCodePoint(code) {
+  if (!Number.isFinite(code) || code < 0 || code > 0x10ffff) return ''
+  try {
+    return String.fromCodePoint(code)
+  } catch {
+    return ''
+  }
+}
+
+function decodeHtmlEntities(text) {
+  return String(text ?? '')
+    .replace(/&#x([0-9a-f]+);/gi, (_match, hex) => safeCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_match, dec) => safeCodePoint(parseInt(dec, 10)))
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+}
+
+/** Decode the base64 JSON payload QQ attaches to a market-face element. */
+function decodeFaceExt(ext) {
+  if (typeof ext !== 'string' || ext.trim() === '') return ''
+  try {
+    const parsed = JSON.parse(Buffer.from(ext.trim(), 'base64').toString('utf8'))
+    if (parsed !== null && typeof parsed === 'object' && typeof parsed.text === 'string' && parsed.text.trim() !== '') {
+      return parsed.text.trim().slice(0, 40)
+    }
+  } catch {
+    // A malformed face payload is not worth failing the message over.
+  }
+  return ''
+}
+
+/**
+ * Turn QQ's protocol-ish message text into clean, model-readable text.
+ *
+ * QQ may inline elements such as `<faceType=6,faceId="0",ext="...">` for
+ * stickers/faces, plus HTML entities and other angle-bracket tags. A text-only
+ * model cannot interpret those, so they become short `[QQ表情]` markers and the
+ * remaining tags are stripped. URL query strings are unaffected.
+ */
+export function cleanQqText(text) {
+  let value = typeof text === 'string' ? text : String(text ?? '')
+  value = value.replace(
+    /<faceType\s*=\s*"?([^",>]*)"?(?:\s*,\s*faceId\s*=\s*"?([^",>]*)"?)?(?:\s*,\s*ext\s*=\s*"([^"]*)")?\s*\/?>/gi,
+    (_match, faceType, faceId, ext) => {
+      const decoded = decodeFaceExt(ext)
+      if (decoded !== '') return `[QQ表情: ${decoded}]`
+      const id = String(faceId ?? faceType ?? '').trim()
+      return id !== '' ? `[QQ表情 ${id}]` : '[QQ表情]'
+    }
+  )
+  value = value.replace(/<(?:mface|bface|sface|face|rps|dice)\b[^>]*>/gi, '[QQ表情]')
+  value = value.replace(/<[^>]+>/g, '')
+  value = decodeHtmlEntities(value)
+  value = value.replace(/[ \t\u00a0]+/g, ' ').replace(/[ \t]*\n[ \t]*/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
+  return value
+}
+
+/**
+ * Human/LLM-readable marker for one inbound image attachment. The plugin does
+ * not perform vision inference, so size + media type are the only facts the
+ * text-only model can be given.
+ */
+export function describeImageMarker(attachment) {
+  const width = Number(attachment?.width)
+  const height = Number(attachment?.height)
+  const size = Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0 ? `${Math.round(width)}×${Math.round(height)}` : ''
+  let kind = typeof attachment?.contentType === 'string' ? attachment.contentType.trim() : ''
+  if (kind === '') {
+    const match = String(attachment?.filename ?? '').match(/\.([a-z0-9]{2,5})$/i)
+    if (match !== null) kind = match[1].toLowerCase()
+  }
+  const parts = []
+  if (size !== '') parts.push(size)
+  if (kind !== '') parts.push(kind)
+  return parts.length > 0 ? `[图片 ${parts.join(' ')}]` : '[图片]'
+}
+

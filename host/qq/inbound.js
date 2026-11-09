@@ -5,6 +5,8 @@
  * events become `InboundMessage`, known system events become `SystemEvent`
  * and everything else (READY/RESUMED/unknown) becomes `null`.
  */
+import { cleanQqText } from '../util/text.js'
+
 const MESSAGE_TYPES = Object.freeze({
   C2C_MESSAGE_CREATE: 'c2c',
   GROUP_AT_MESSAGE_CREATE: 'group'
@@ -33,7 +35,7 @@ function firstString(...values) {
 }
 
 function normalizeText(value) {
-  return typeof value === 'string' ? value.trim() : ''
+  return typeof value === 'string' ? cleanQqText(value) : ''
 }
 
 function normalizeTimestamp(value, fallback = Date.now()) {
