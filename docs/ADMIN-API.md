@@ -54,6 +54,12 @@
 
 `llm.test` args `{ prompt?: string }` → `{ text, provider, model, usage: {inputTokens,outputTokens,totalTokens} }`；失败返回 `{ok:false,error}`（错误信息由 admin 层包装）。
 
+### 2.4.1 视觉模型自检（可选）
+
+`vision.test` → 用内置 1×1 PNG 调用已配置的 OpenAI 兼容视觉接口，返回 `{ description, model, usage, ms }`；
+未启用/未配置/接口失败时返回 `{ok:false,error}`。`snapshot` 中的 `vision` 字段给出 `{enabled, configured, baseUrl, model, hasApiKey}`。
+`config` 的 `vision.apiKey` 与 `qq.appSecret` 一样只写不读（响应里为空串 + 掩码 + `hasApiKey`）。
+
 ### 2.5 预算
 
 - `budget.snapshot` → `{ date, monthKey, today:{calls,inputTokens,outputTokens,totalTokens,cost}, month:{calls,inputTokens,outputTokens,totalTokens,cost}, chats:[{chatId,calls,totalTokens,cost,lastAt}], limits:{...}, currency }`

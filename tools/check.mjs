@@ -78,6 +78,8 @@ const required = [
   'host/brain/prompt.js',
   'host/brain/chat.js',
   'host/brain/commands.js',
+  'host/vision/client.js',
+  'host/vision/download.js',
   'host/memory/store.js',
   'host/memory/compress.js',
   'host/memory/extract.js',

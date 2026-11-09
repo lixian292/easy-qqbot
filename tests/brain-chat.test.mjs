@@ -85,7 +85,8 @@ async function setup(overrides = {}) {
     commandHandler,
     qqClient,
     logger,
-    captureIncomingImage: overrides.captureIncomingImage
+    captureIncomingImage: overrides.captureIncomingImage,
+    describeIncomingImage: overrides.describeIncomingImage
   })
   return {
     paths,
@@ -359,6 +360,53 @@ test('入站图片：触发 captureIncomingImage 并在用户消息中标记图�
     assert.equal(lastUser.content, '[图片 image/png]')
     const chat = await memoryStore.getChat('c2c_u1')
     assert.equal(chat.history[0].content, '[图片 image/png]')
+  } finally {
+    await cleanup()
+  }
+})
+
+test('入站图片：配置视觉描述后把描述注入用户消息', async () => {
+  const { engine, llm, memoryStore, cleanup } = await setup({
+    describeIncomingImage: async (attachment) => {
+      assert.equal(attachment.url, 'https://example.com/cat.jpg')
+      return '一只橘猫趴在键盘上，配文“摸鱼中”'
+    }
+  })
+  try {
+    await engine.handleInbound(
+      makeInbound({
+        text: '看看这个',
+        attachments: [{ url: 'https://example.com/cat.jpg', contentType: 'image/jpeg', width: 640, height: 480 }]
+      })
+    )
+    const lastUser = llm.calls[0].messages[llm.calls[0].messages.length - 1]
+    assert.equal(lastUser.role, 'user')
+    assert.match(lastUser.content, /看看这个/)
+    assert.match(lastUser.content, /\[图片 640×480 image\/jpeg\]/)
+    assert.match(lastUser.content, /图片内容：一只橘猫趴在键盘上/)
+
+    const chat = await memoryStore.getChat('c2c_u1')
+    assert.match(chat.history[0].content, /图片内容：一只橘猫/)
+  } finally {
+    await cleanup()
+  }
+})
+
+test('入站图片：视觉描述失败时降级为普通图片占位', async () => {
+  const { engine, llm, cleanup } = await setup({
+    describeIncomingImage: async () => {
+      throw new Error('vision unavailable')
+    }
+  })
+  try {
+    await engine.handleInbound(
+      makeInbound({
+        text: '',
+        attachments: [{ url: 'https://example.com/cat.png', contentType: 'image/png' }]
+      })
+    )
+    const lastUser = llm.calls[0].messages[llm.calls[0].messages.length - 1]
+    assert.equal(lastUser.content, '[图片 image/png]')
   } finally {
     await cleanup()
   }

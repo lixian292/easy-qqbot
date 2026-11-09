@@ -49,7 +49,8 @@ function isImageAttachment(attachment) {
  *   commandHandler?: object,
  *   qqClient?: object,
  *   logger?: object,
- *   captureIncomingImage?: (attachment: object, inbound: object) => Promise<unknown>
+ *   captureIncomingImage?: (attachment: object, inbound: object) => Promise<unknown>,
+ *   describeIncomingImage?: (attachment: object, inbound: object) => Promise<string|undefined>
  * }} deps
  */
 export function createChatEngine({
@@ -65,7 +66,8 @@ export function createChatEngine({
   commandHandler,
   qqClient,
   logger,
-  captureIncomingImage
+  captureIncomingImage,
+  describeIncomingImage
 } = {}) {
   const queues = new Map()
   const blockNoticedAt = new Map()
@@ -211,14 +213,34 @@ export function createChatEngine({
   /**
    * Content persisted to memory and shown to the model. QQ only hands the bot a
    * text placeholder for images (and protocol markup for faces), so make the
-   * image facts explicit: the text model still cannot see pixels, but it can
-   * acknowledge what arrived instead of guessing from a bare "[图片]".
+   * image facts explicit. When a vision endpoint is configured, each image is
+   * described first and the description is embedded into the marker; a failed
+   * description simply degrades to the size/media-type marker.
    */
-  function buildInboundContent(inbound) {
+  async function buildInboundContent(inbound) {
     const rawText = String(inbound?.text ?? '').trim()
     const images = inboundImages(inbound)
     if (images.length === 0) return rawText
-    const markers = images.map((attachment) => describeImageMarker(attachment)).join(' ')
+    let descriptions = images.map(() => '')
+    if (typeof describeIncomingImage === 'function') {
+      descriptions = await Promise.all(
+        images.map(async (attachment) => {
+          try {
+            const text = await describeIncomingImage(attachment, inbound)
+            return typeof text === 'string' ? clampText(text.trim(), 240) : ''
+          } catch (error) {
+            logger?.warn?.('入站图片描述失败', { chatId: inbound?.chatId, error: error?.message })
+            return ''
+          }
+        })
+      )
+    }
+    const markers = images
+      .map((attachment, index) => {
+        const base = describeImageMarker(attachment)
+        return descriptions[index] === '' ? base : `${base}（图片内容：${descriptions[index]}）`
+      })
+      .join(' ')
     const withoutPlaceholder = rawText
       .replace(/\[图片\]/g, '')
       .replace(/\s{2,}/g, ' ')
@@ -318,7 +340,7 @@ export function createChatEngine({
 
     // 2. Inbound images: capture into the sticker candidate library + explicit marker.
     captureInboundImages(inbound, config)
-    const content = buildInboundContent(inbound)
+    const content = await buildInboundContent(inbound)
 
     // 3. Budget gate.
     if (typeof budgetStore?.check === 'function') {

@@ -43,6 +43,16 @@ export const DEFAULT_CONFIG = Object.freeze({
     maxTokens: 800,
     timeoutMs: 120000
   },
+  vision: {
+    enabled: false,
+    baseUrl: '',
+    apiKey: '',
+    model: '',
+    prompt: '请用中文简短描述这张图片的内容（1-2 句，最多 80 字）；如果是表情包/梗图，请说明画面、文字和表达的情绪。',
+    maxTokens: 240,
+    timeoutMs: 45000,
+    maxImageBytes: 8388608
+  },
   persona: {
     name: '小Q',
     systemPrompt:
@@ -163,6 +173,19 @@ function validHttpBase(raw, fallback) {
   }
 }
 
+/** Optional HTTP base URL: empty means "not configured", invalid values are dropped. */
+function optionalHttpBase(raw) {
+  const value = stringField(raw, '', { maxLength: 256 })
+  if (value === '') return ''
+  try {
+    const url = new URL(value)
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return ''
+    return value.replace(/\/+$/, '')
+  } catch {
+    return ''
+  }
+}
+
 /**
  * Normalize arbitrary persisted config into a complete, typed config object.
  * @returns {{ config: object, warnings: string[] }}
@@ -175,6 +198,7 @@ export function normalizeConfig(raw) {
   const defaults = DEFAULT_CONFIG
   const qq = isPlainObject(input.qq) ? input.qq : {}
   const llm = isPlainObject(input.llm) ? input.llm : {}
+  const vision = isPlainObject(input.vision) ? input.vision : {}
   const persona = isPlainObject(input.persona) ? input.persona : {}
   const budget = isPlainObject(input.budget) ? input.budget : {}
   const memory = isPlainObject(input.memory) ? input.memory : {}
@@ -219,6 +243,16 @@ export function normalizeConfig(raw) {
       temperature: numberField(llm.temperature, defaults.llm.temperature, { min: 0, max: 2 }),
       maxTokens: numberField(llm.maxTokens, defaults.llm.maxTokens, { integer: true, min: 64, max: 32768 }),
       timeoutMs: numberField(llm.timeoutMs, defaults.llm.timeoutMs, { integer: true, min: 5000, max: 600000 })
+    },
+    vision: {
+      enabled: boolField(vision.enabled, defaults.vision.enabled),
+      baseUrl: optionalHttpBase(vision.baseUrl),
+      apiKey: stringField(vision.apiKey, defaults.vision.apiKey, { maxLength: 512 }),
+      model: stringField(vision.model, defaults.vision.model, { maxLength: 128 }),
+      prompt: stringField(vision.prompt, defaults.vision.prompt, { allowEmpty: false, maxLength: 2000 }),
+      maxTokens: numberField(vision.maxTokens, defaults.vision.maxTokens, { integer: true, min: 32, max: 4096 }),
+      timeoutMs: numberField(vision.timeoutMs, defaults.vision.timeoutMs, { integer: true, min: 5000, max: 300000 }),
+      maxImageBytes: numberField(vision.maxImageBytes, defaults.vision.maxImageBytes, { integer: true, min: 65536, max: 20971520 })
     },
     persona: {
       name: stringField(persona.name, defaults.persona.name, { allowEmpty: false, maxLength: 32 }),
@@ -278,6 +312,9 @@ export function normalizeConfig(raw) {
   if (config.qq.appId === '' || config.qq.appSecret === '') {
     warnings.push('qq.appId / qq.appSecret 尚未填写，插件会以「待配置」状态启动，不会连接 QQ')
   }
+  if (config.vision.enabled && (config.vision.baseUrl === '' || config.vision.apiKey === '' || config.vision.model === '')) {
+    warnings.push('vision.enabled 已开启，但 baseUrl / apiKey / model 不完整；图片描述会被跳过')
+  }
   return { config, warnings }
 }
 
@@ -324,6 +361,12 @@ export function publicConfig(config) {
       appSecret: '',
       appSecretMasked: maskSecret(config.qq.appSecret),
       hasSecret: config.qq.appSecret !== ''
+    },
+    vision: {
+      ...clone(config.vision),
+      apiKey: '',
+      apiKeyMasked: maskSecret(config.vision.apiKey),
+      hasApiKey: config.vision.apiKey !== ''
     }
   }
 }

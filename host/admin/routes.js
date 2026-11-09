@@ -358,6 +358,17 @@ async function dispatch(method, args, app) {
         ms: Date.now() - started
       }
     }
+    case 'vision.test': {
+      // 1x1 transparent PNG: proves URL/auth/model wiring without requiring a
+      // sample upload. Providers normally answer "空白/透明图片".
+      const pixel = Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+        'base64'
+      )
+      const started = Date.now()
+      const result = await app.visionClient.describeImage({ buffer: pixel, contentType: 'image/png' })
+      return { ...result, ms: Date.now() - started }
+    }
     case 'budget.snapshot':
       return app.budgetStore.snapshot()
     case 'budget.reset':
@@ -535,11 +546,20 @@ async function snapshot(app) {
     configWarnings: app.configStore.warnings(),
     status: app.qqClient.status(),
     llm: { provider: config.llm.provider, model: config.llm.model },
+    vision: readVisionStatus(app),
     budget,
     stickers: { total: stickerStats.total, byLayer: stickerStats.byLayer, tags: stickerStats.tags },
     chats: chats.length,
     people: people.length,
     serverTime: Date.now()
+  }
+}
+
+function readVisionStatus(app) {
+  try {
+    return typeof app.visionClient?.status === 'function' ? app.visionClient.status() : null
+  } catch {
+    return null
   }
 }
 

@@ -12,6 +12,8 @@ import { createMemoryStore } from './memory/store.js'
 import { createMemoryExtractor } from './memory/extract.js'
 import { createCompressor } from './memory/compress.js'
 import { createLlmClient } from './brain/llm.js'
+import { createVisionClient } from './vision/client.js'
+import { downloadImageBuffer } from './vision/download.js'
 import { createStickerStore } from './stickers/store.js'
 import { createStickerImporter } from './stickers/importer.js'
 import { createStickerSelector } from './stickers/selector.js'
@@ -80,8 +82,13 @@ function sanitizeConfigPatch(patch) {
     if (secretMissing) delete qq.appSecret
     out.qq = qq
   }
-  if (out.admin !== null && typeof out.admin === 'object' && out.admin.path === undefined) {
-    // keep default merge behavior
+  if (out.vision !== null && typeof out.vision === 'object') {
+    const vision = { ...out.vision }
+    const keyMissing = vision.apiKey === undefined || vision.apiKey === ''
+    delete vision.apiKeyMasked
+    delete vision.hasApiKey
+    if (keyMissing) delete vision.apiKey
+    out.vision = vision
   }
   return out
 }
@@ -173,6 +180,7 @@ export async function createApp({ ctx, version = PLUGIN_VERSION } = {}) {
   const memoryStore = createMemoryStore({ paths, configStore, logger })
   const llmService = resolveService(ctx, 'llm')
   const llmClient = createLlmClient({ ctx: { llm: llmService }, configStore, logger })
+  const visionClient = createVisionClient({ configStore, logger })
   const stickerStore = createStickerStore({ paths, configStore, logger })
   const importer = createStickerImporter({ paths, configStore, stickerStore, logger })
   const stickerSelector = createStickerSelector({ stickerStore, configStore, logger })
@@ -197,6 +205,36 @@ export async function createApp({ ctx, version = PLUGIN_VERSION } = {}) {
     logger,
     context: contextInfo
   })
+
+  /**
+   * Turn one inbound image attachment into a short text description using the
+   * optional OpenAI-compatible vision endpoint. Never throws: a failure simply
+   * degrades to the plain `[图片 ...]` marker.
+   */
+  const describeIncomingImage = async (attachment, inbound) => {
+    const config = configStore.get()
+    if (config.vision?.enabled !== true) return ''
+    if (attachment === null || typeof attachment?.url !== 'string' || attachment.url === '') return ''
+    try {
+      const downloaded = await downloadImageBuffer({
+        url: attachment.url,
+        contentType: attachment.contentType,
+        maxBytes: Number(config.vision.maxImageBytes) || 8388608
+      })
+      const result = await visionClient.describeImage({
+        buffer: downloaded.buffer,
+        contentType: downloaded.contentType
+      })
+      return result.description
+    } catch (error) {
+      logger.warn('入站图片视觉理解失败，已降级为文字占位', {
+        chatId: inbound?.chatId,
+        code: error?.code,
+        error: error?.message
+      })
+      return ''
+    }
+  }
 
   let chatEngine
   const qqClient = createQQClient({
@@ -226,6 +264,7 @@ export async function createApp({ ctx, version = PLUGIN_VERSION } = {}) {
     commandHandler,
     qqClient,
     logger,
+    describeIncomingImage,
     captureIncomingImage: async (attachment, inbound) => {
       if (attachment === null || typeof attachment?.url !== 'string' || attachment.url === '') return undefined
       return importer.captureFromUrl({
@@ -250,6 +289,7 @@ export async function createApp({ ctx, version = PLUGIN_VERSION } = {}) {
     personaStore,
     memoryStore,
     llmClient,
+    visionClient,
     stickerStore,
     importer,
     stickerSelector,

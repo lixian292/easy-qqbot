@@ -839,6 +839,20 @@
       ]
     },
     {
+      title: '视觉模型（可选）',
+      hint: '使用 OpenAI 兼容的视觉接口把入站图片转成文字描述，再注入对话上下文。baseUrl 示例：https://api.siliconflow.cn/v1 或 https://openrouter.ai/api/v1；启用后需同时填写 Base URL、API Key 与模型名。',
+      fields: [
+        { path: 'vision.enabled', label: '启用图片理解', type: 'bool' },
+        { path: 'vision.baseUrl', label: 'API Base URL', type: 'text', placeholder: 'https://api.siliconflow.cn/v1' },
+        { path: 'vision.apiKey', label: 'API Key', type: 'secret', secretOf: 'vision' },
+        { path: 'vision.model', label: '视觉模型', type: 'text', placeholder: '例如 Qwen/Qwen2.5-VL-7B-Instruct' },
+        { path: 'vision.prompt', label: '描述提示词', type: 'textarea', wide: true, rows: 3 },
+        { path: 'vision.maxTokens', label: '最大输出 tokens', type: 'number', min: 32, max: 4096 },
+        { path: 'vision.timeoutMs', label: '超时 (ms)', type: 'number', min: 5000, max: 300000 },
+        { path: 'vision.maxImageBytes', label: '单张图片最大字节', type: 'number', min: 65536, max: 20971520 }
+      ]
+    },
+    {
       title: '人设',
       hint: '全局默认人设；会话级 / 用户级覆盖在「会话」页配置。',
       fields: [
@@ -952,8 +966,10 @@
       var shardText = Array.isArray(value) ? value.join(',') : '';
       control = '<input type="text" data-path="' + path + '" data-type="shard" value="' + esc(shardText) + '" placeholder="0,1" />';
     } else if (field.type === 'secret') {
-      var masked = config && config.qq ? config.qq.appSecretMasked : '';
-      var hasSecret = !!(config && config.qq && config.qq.hasSecret);
+      var secretRoot = field.secretOf || 'qq';
+      var secretConfig = config && config[secretRoot] && typeof config[secretRoot] === 'object' ? config[secretRoot] : {};
+      var masked = secretConfig.appSecretMasked || secretConfig.apiKeyMasked || '';
+      var hasSecret = !!(secretConfig.hasSecret || secretConfig.hasApiKey);
       var placeholder = hasSecret ? '已保存（' + masked + '），留空不修改' : '尚未设置';
       control = '<input type="password" autocomplete="new-password" data-path="' + path + '" data-type="secret" value="" placeholder="' + esc(placeholder) + '" />';
     } else {

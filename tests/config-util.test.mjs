@@ -128,6 +128,29 @@ test('describeImageMarker adds size and media type for the text model', () => {
   assert.equal(describeImageMarker({}), '[图片]')
 })
 
+test('vision config normalizes defaults and publicConfig masks the API key', () => {
+  const { config, warnings } = normalizeConfig({
+    qq: { appId: '1', appSecret: 's' },
+    vision: { enabled: true, baseUrl: 'https://api.example.com/v1/', apiKey: 'sk-secret', model: 'vl' }
+  })
+  assert.equal(config.vision.enabled, true)
+  assert.equal(config.vision.baseUrl, 'https://api.example.com/v1')
+  assert.equal(config.vision.apiKey, 'sk-secret')
+  assert.equal(config.vision.model, 'vl')
+  assert.equal(warnings.length, 0)
+
+  const pub = publicConfig(config)
+  assert.equal(pub.vision.apiKey, '')
+  assert.equal(pub.vision.hasApiKey, true)
+  assert.ok(pub.vision.apiKeyMasked.length > 0)
+  assert.equal(pub.vision.apiKeyMasked.includes('sk-secret'), false)
+
+  const incomplete = normalizeConfig({ vision: { enabled: true } })
+  assert.ok(incomplete.warnings.some((warning) => warning.includes('vision.enabled')))
+  const badUrl = normalizeConfig({ vision: { baseUrl: 'javascript:alert(1)' } })
+  assert.equal(badUrl.config.vision.baseUrl, '')
+})
+
 test('createPaths keeps data inside the package by default and maps layers', () => {
   const paths = createPaths({ packageRoot: 'D:\\tmp\\pkg' })
   assert.equal(paths.data, path.join('D:\\tmp\\pkg', 'data'))
