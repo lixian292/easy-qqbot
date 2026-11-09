@@ -1,0 +1,67 @@
+{
+  "name": "easy-qqbot",
+  "version": "0.1.0",
+  "description": "A simple, easy-to-use QQ bot plugin for DeepSeek Harness: budget control, long-term memory, context compression, personalization, batch sticker import/tagging and sticker replies. All code and data live inside this package directory.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "host",
+    "tools",
+    "docs",
+    "images",
+    "LICENSE",
+    "README.md",
+    "locale/*.json",
+    "icon.svg",
+    "cordis.patch.yml"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0",
+    "dsh": ">=0.2.1-rc.2"
+  },
+  "scripts": {
+    "test": "node --test \"tests/*.test.mjs\"",
+    "check": "node tools/check.mjs"
+  },
+  "keywords": [
+    "easy-qqbot",
+    "qqbot",
+    "qq-bot",
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "cordis",
+    "sticker"
+  ],
+  "license": "MIT",
+  "author": "lixian292",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lixian292/easy-qqbot.git"
+  },
+  "homepage": "https://github.com/lixian292/easy-qqbot#readme",
+  "bugs": {
+    "url": "https://github.com/lixian292/easy-qqbot/issues"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
+    }
+  }
+}

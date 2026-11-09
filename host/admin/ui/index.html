@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
+  <title>QQ Bot 控制台</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%233a6df5'/%3E%3Ctext x='16' y='23' font-size='20' font-family='Segoe UI,sans-serif' font-weight='700' fill='%23ffffff' text-anchor='middle'%3EQ%3C/text%3E%3C/svg%3E" />
+  <style>
+    /* Critical first paint: avoid a flash of unstyled content while style.css loads. */
+    html, body { margin: 0; background: #f4f6fb; color: #1c2333; }
+    @media (prefers-color-scheme: dark) {
+      html, body { background: #0f131c; color: #e6e9f2; }
+    }
+  </style>
+  <link rel="stylesheet" href="./assets/style.css" />
+  <script>
+    /*
+     * Fallback asset loader.
+     *
+     * The plugin serves the page with a trailing slash (GET /qqbot redirects to
+     * /qqbot/), where the relative tags above resolve correctly. If the page is
+     * ever served at a slashless path (or through a custom prefix that does not
+     * redirect), relative "./assets/..." would resolve against the wrong
+     * directory, so load the assets from an absolute path derived from the
+     * current page path instead. The app.js load guard makes double loading a
+     * no-op in case both paths are used.
+     */
+    (function () {
+      var path = window.location.pathname;
+      if (path === '' || path.charAt(path.length - 1) === '/' || /\.html?$/i.test(path)) return;
+      var base = path.replace(/\/+$/, '');
+      if (!base) return;
+      var script = document.createElement('script');
+      script.src = base + '/assets/app.js';
+      script.async = false;
+      document.head.appendChild(script);
+      var link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = base + '/assets/style.css';
+      document.head.appendChild(link);
+    })();
+  </script>
+  <script src="./assets/app.js" defer></script>
+</head>
+<body>
+  <div>
+    <header class="topbar">
+      <div class="topbar-main">
+        <div class="brand">
+          <div class="brand-logo" aria-hidden="true">Q</div>
+          <div class="brand-text">
+            <h1 class="brand-title">QQ Bot 控制台</h1>
+            <div class="brand-sub" id="dataDir" title="">数据目录加载中…</div>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <span id="connBadge" class="badge badge-muted"><span class="dot"></span><span>加载中</span></span>
+          <button id="exitBtn" class="btn btn-exit" type="button" title="关闭工作台窗口，或返回 DSH 对话界面（也可按 Esc）">← 退出工作台</button>
+          <button id="refreshBtn" class="btn btn-primary" type="button">刷新</button>
+        </div>
+      </div>
+      <nav class="tabs" role="tablist" aria-label="功能分区">
+        <button class="tab is-active" type="button" role="tab" aria-selected="true" data-tab="overview">概览</button>
+        <button class="tab" type="button" role="tab" aria-selected="false" data-tab="config">配置</button>
+        <button class="tab" type="button" role="tab" aria-selected="false" data-tab="stickers">表情包</button>
+        <button class="tab" type="button" role="tab" aria-selected="false" data-tab="budget">预算</button>
+        <button class="tab" type="button" role="tab" aria-selected="false" data-tab="chats">会话</button>
+        <button class="tab" type="button" role="tab" aria-selected="false" data-tab="people">人员</button>
+        <button class="tab" type="button" role="tab" aria-selected="false" data-tab="logs">日志</button>
+      </nav>
+    </header>
+
+    <main class="panels">
+      <!-- ============ 概览 ============ -->
+      <section id="panel-overview" class="panel is-active" role="tabpanel" aria-label="概览">
+        <div class="panel-head">
+          <div>
+            <h2>概览</h2>
+            <p class="panel-desc">QQ 连接、模型、预算与表情包的整体状态。</p>
+          </div>
+          <div class="panel-actions">
+            <button id="btnStart" class="btn btn-primary" type="button">启动</button>
+            <button id="btnStop" class="btn" type="button">停止</button>
+            <button id="btnReconnect" class="btn" type="button">重连</button>
+            <button id="btnTestQQ" class="btn" type="button">测试 QQ 凭证</button>
+            <button id="btnTestLLM" class="btn" type="button">测试 LLM</button>
+          </div>
+        </div>
+        <div id="overviewCards" class="card-grid"></div>
+        <div class="two-col">
+          <div class="card">
+            <h3 class="card-title">连通性测试</h3>
+            <div class="test-block">
+              <div class="test-label">QQ 凭证</div>
+              <div id="testQQResult" class="result muted">尚未测试</div>
+            </div>
+            <div class="test-block">
+              <div class="test-label">LLM 调用</div>
+              <div id="testLLMResult" class="result muted">尚未测试</div>
+            </div>
+          </div>
+          <div class="card">
+            <h3 class="card-title">配置警告</h3>
+            <ul id="overviewWarnings" class="warning-list"><li class="muted">加载中…</li></ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ 配置 ============ -->
+      <section id="panel-config" class="panel" role="tabpanel" aria-label="配置">
+        <div class="panel-head">
+          <div>
+            <h2>配置</h2>
+            <p class="panel-desc">修改后写入 data/config.json；保存后 QQ 连接会按新配置自动重启。</p>
+          </div>
+          <div class="panel-actions">
+            <button id="btnConfigRefresh" class="btn" type="button">重新读取</button>
+            <button id="btnConfigSave" class="btn btn-primary" type="button">保存配置</button>
+          </div>
+        </div>
+        <ul id="configWarnings" class="warning-list"></ul>
+        <form id="configForm" class="config-form" autocomplete="off"></form>
+        <p class="hint">提示：AppSecret 只显示掩码，输入框留空表示不修改；留空或非法的数值会被插件回退为默认值。</p>
+      </section>
+
+      <!-- ============ 表情包 ============ -->
+      <section id="panel-stickers" class="panel" role="tabpanel" aria-label="表情包">
+        <div class="panel-head">
+          <div>
+            <h2>表情包</h2>
+            <p class="panel-desc">上传或扫描导入图片，管理标签与图层；正式库的表情包才会被用于聊天回复。</p>
+          </div>
+          <div class="panel-actions">
+            <button id="btnStickerRefresh" class="btn" type="button">刷新</button>
+            <button id="btnStickerUpload" class="btn btn-primary" type="button">上传图片</button>
+            <button id="btnStickerScan" class="btn" type="button">扫描 import 目录</button>
+            <input id="stickerFileInput" class="hidden-input" type="file" accept="image/*" multiple aria-hidden="true" />
+          </div>
+        </div>
+        <div class="panel-toolbar">
+          <div id="stickerLayerTabs" class="segmented" role="tablist" aria-label="图层筛选"></div>
+          <label class="check-inline"><input id="stickerSelectAll" type="checkbox" /><span>全选本页</span></label>
+          <span id="stickerCount" class="muted toolbar-meta"></span>
+        </div>
+        <div class="panel-toolbar">
+          <input id="stickerSearch" class="input search-input" type="search" placeholder="搜索标签 / 描述 / id（回车搜索）" autocomplete="off" />
+        </div>
+        <div id="stickerTagChips" class="chip-row tag-filter"></div>
+        <div id="stickerBulkBar" class="bulkbar" hidden>
+          <span id="bulkCount" class="bulk-count">已选 0 项</span>
+          <input id="bulkAddTags" class="input input-sm" type="text" placeholder="添加标签，逗号分隔" />
+          <button id="btnBulkAddTags" class="btn btn-sm" type="button">加标签</button>
+          <input id="bulkRemoveTags" class="input input-sm" type="text" placeholder="移除标签，逗号分隔" />
+          <button id="btnBulkRemoveTags" class="btn btn-sm" type="button">移除标签</button>
+          <select id="bulkLayer" class="input input-sm" aria-label="批量修改图层">
+            <option value="">改图层…</option>
+            <option value="library">正式库</option>
+            <option value="candidate">候选</option>
+            <option value="negative">负面</option>
+            <option value="trash">回收站</option>
+          </select>
+          <button id="btnBulkLayerApply" class="btn btn-sm" type="button">应用</button>
+          <button id="btnBulkTrash" class="btn btn-sm" type="button">移入回收站</button>
+          <button id="btnBulkPurge" class="btn btn-sm btn-danger" type="button">彻底删除</button>
+          <button id="btnBulkClear" class="btn btn-sm" type="button">取消选择</button>
+        </div>
+        <div id="stickerGrid" class="sticker-grid"></div>
+        <div class="center">
+          <button id="btnStickerMore" class="btn" type="button" hidden>加载更多</button>
+        </div>
+      </section>
+
+      <!-- ============ 预算 ============ -->
+      <section id="panel-budget" class="panel" role="tabpanel" aria-label="预算">
+        <div class="panel-head">
+          <div>
+            <h2>预算</h2>
+            <p class="panel-desc">今日 / 本月 token 与费用统计，以及最近调用明细。</p>
+          </div>
+          <div class="panel-actions">
+            <button id="btnBudgetRefresh" class="btn" type="button">刷新</button>
+            <button id="btnBudgetResetToday" class="btn" type="button">重置今日</button>
+            <button id="btnBudgetResetMonth" class="btn" type="button">重置本月</button>
+            <button id="btnBudgetResetAll" class="btn btn-danger-ghost" type="button">全部重置</button>
+          </div>
+        </div>
+        <div id="budgetCards" class="card-grid"></div>
+        <div class="card">
+          <h3 class="card-title">限额使用情况</h3>
+          <div id="budgetLimits" class="limit-list"></div>
+        </div>
+        <div class="two-col">
+          <div class="card">
+            <h3 class="card-title">按会话用量</h3>
+            <div id="budgetChats"></div>
+          </div>
+          <div class="card">
+            <h3 class="card-title">最近调用</h3>
+            <div id="budgetEvents"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ 会话 ============ -->
+      <section id="panel-chats" class="panel" role="tabpanel" aria-label="会话">
+        <div class="panel-head">
+          <div>
+            <h2>会话</h2>
+            <p class="panel-desc">查看历史消息、摘要与长期事实，可压缩上下文、抽取记忆或覆盖人设。</p>
+          </div>
+        </div>
+        <div class="split">
+          <aside class="card chat-list-pane">
+            <div class="pane-head">
+              <input id="chatSearch" class="input" type="search" placeholder="搜索会话 id / 标题" autocomplete="off" />
+              <button id="btnChatsRefresh" class="btn btn-sm" type="button">刷新</button>
+            </div>
+            <div id="chatList" class="list"></div>
+          </aside>
+          <section id="chatDetail" class="card chat-detail">
+            <div class="empty">从左侧选择一个会话查看详情</div>
+          </section>
+        </div>
+      </section>
+
+      <!-- ============ 人员 ============ -->
+      <section id="panel-people" class="panel" role="tabpanel" aria-label="人员">
+        <div class="panel-head">
+          <div>
+            <h2>人员</h2>
+            <p class="panel-desc">记录聊天中出现过的用户画像与长期事实。</p>
+          </div>
+          <div class="panel-actions">
+            <span id="peopleCount" class="muted"></span>
+            <button id="btnPeopleRefresh" class="btn" type="button">刷新</button>
+          </div>
+        </div>
+        <div class="card">
+          <div id="peopleTable"></div>
+        </div>
+      </section>
+
+      <!-- ============ 日志 ============ -->
+      <section id="panel-logs" class="panel" role="tabpanel" aria-label="日志">
+        <div class="panel-head">
+          <div>
+            <h2>日志</h2>
+            <p class="panel-desc">插件最近写入的日志（最多 300 条），按时间从旧到新排列。</p>
+          </div>
+          <div class="panel-actions">
+            <select id="logLevel" class="input input-sm" aria-label="日志级别筛选">
+              <option value="">全部级别</option>
+              <option value="debug">debug</option>
+              <option value="info">info</option>
+              <option value="warn">warn</option>
+              <option value="error">error</option>
+            </select>
+            <label class="check-inline"><input id="logAutoScroll" type="checkbox" checked /><span>自动滚动</span></label>
+            <span id="logCount" class="muted"></span>
+            <button id="btnLogsRefresh" class="btn" type="button">刷新</button>
+          </div>
+        </div>
+        <div id="logList" class="log-list card"></div>
+      </section>
+    </main>
+  </div>
+
+  <div id="toastRoot" class="toast-root" role="status" aria-live="polite"></div>
+  <div id="modalRoot" class="modal-root" hidden></div>
+
+  <noscript>
+    <div class="noscript">QQ Bot 控制台需要启用 JavaScript 才能使用。</div>
+  </noscript>
+</body>
+</html>

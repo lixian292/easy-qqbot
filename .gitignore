@@ -1,0 +1,13 @@
+# runtime data (config incl. secrets, chat history, memory, sticker library, budget logs)
+data/
+# local reference downloads / scratch space
+tmp/
+# batch sticker import drop zone contents (keep the directory itself)
+import/*
+!import/.gitkeep
+node_modules/
+*.log
+.DS_Store
+Thumbs.db
+.env
+.env.*

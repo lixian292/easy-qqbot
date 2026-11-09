@@ -1,0 +1,7 @@
+# This bundle's own patch: it inserts the easy-qqbot plugin row into a profile.
+# User-level configuration belongs in the profile's cordis.patch.yml, not here.
+# The plugin reads its own settings from qqbot/data/config.json (created on first run).
+- insert:
+    - id: qqbot
+      name: easy-qqbot
+      config: {}
