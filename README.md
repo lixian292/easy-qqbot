@@ -89,11 +89,19 @@
 
 ### 2. 安装
 
-克隆仓库后，在 DSH 会话里安装本地 bundle：
+**方式 A：在 DSH 里直接安装（推荐）**
+
+在 DSH 对话中让 Agent 执行，或调用插件管理工具：
+
+```text
+plugin_manager install_bundle https://github.com/lixian292/easy-qqbot
+```
+
+**方式 B：本地克隆（修改/开发时使用）**
 
 ```powershell
 git clone https://github.com/lixian292/easy-qqbot.git
-# 在 DSH 对话中让 Agent 执行，或手动调用插件管理工具：
+# 在 DSH 对话中安装本地目录（绝对路径）：
 plugin_manager install_bundle <easy-qqbot 的绝对路径>
 ```
 
