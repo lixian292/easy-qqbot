@@ -86,7 +86,7 @@ async function setup(overrides = {}) {
     qqClient,
     logger,
     captureIncomingImage: overrides.captureIncomingImage,
-    describeIncomingImage: overrides.describeIncomingImage
+    describeIncomingMedia: overrides.describeIncomingMedia
   })
   return {
     paths,
@@ -149,7 +149,10 @@ test('正常流程：回复文本、记录预算、写会话历史并异步抽�
     assert.equal(snapshot.today.calls, 1)
 
     await waitFor(() => extractor.calls.length === 1)
-    assert.deepEqual(extractor.calls[0], { chatId: 'c2c_u1' })
+    assert.deepEqual(extractor.calls[0], {
+      chatId: 'c2c_u1',
+      speaker: { userId: 'u1', name: '小明', isGroup: false }
+    })
   } finally {
     await cleanup()
   }
@@ -365,10 +368,11 @@ test('入站图片：触发 captureIncomingImage 并在用户消息中标记图�
   }
 })
 
-test('入站图片：配置视觉描述后把描述注入用户消息', async () => {
+test('入站图片：describeIncomingMedia 的描述注入用户消息', async () => {
+  const seen = []
   const { engine, llm, memoryStore, cleanup } = await setup({
-    describeIncomingImage: async (attachment) => {
-      assert.equal(attachment.url, 'https://example.com/cat.jpg')
+    describeIncomingMedia: async (attachment, inbound) => {
+      seen.push({ attachment, chatId: inbound.chatId })
       return '一只橘猫趴在键盘上，配文“摸鱼中”'
     }
   })
@@ -379,11 +383,13 @@ test('入站图片：配置视觉描述后把描述注入用户消息', async ()
         attachments: [{ url: 'https://example.com/cat.jpg', contentType: 'image/jpeg', width: 640, height: 480 }]
       })
     )
+    assert.equal(seen.length, 1)
+    assert.equal(seen[0].attachment.url, 'https://example.com/cat.jpg')
     const lastUser = llm.calls[0].messages[llm.calls[0].messages.length - 1]
     assert.equal(lastUser.role, 'user')
     assert.match(lastUser.content, /看看这个/)
-    assert.match(lastUser.content, /\[图片 640×480 image\/jpeg\]/)
-    assert.match(lastUser.content, /图片内容：一只橘猫趴在键盘上/)
+    assert.match(lastUser.content, /\[图片 640×480 image\/jpeg\]（图片内容：一只橘猫趴在键盘上/)
+    assert.equal(lastUser.content.includes('[图片]'), false)
 
     const chat = await memoryStore.getChat('c2c_u1')
     assert.match(chat.history[0].content, /图片内容：一只橘猫/)
@@ -392,23 +398,69 @@ test('入站图片：配置视觉描述后把描述注入用户消息', async ()
   }
 })
 
-test('入站图片：视觉描述失败时降级为普通图片占位', async () => {
-  const { engine, llm, cleanup } = await setup({
-    describeIncomingImage: async () => {
-      throw new Error('vision unavailable')
+test('入站语音 / 视频：分别用语音、视频标记注入识别文本', async () => {
+  const descriptions = []
+  const { engine, llm, memoryStore, cleanup } = await setup({
+    describeIncomingMedia: async (attachment) => {
+      descriptions.push(attachment.contentType)
+      if (attachment.contentType === 'voice') return '对方说晚上一起吃饭'
+      return '一只猫在跳舞'
     }
   })
   try {
     await engine.handleInbound(
       makeInbound({
         text: '',
-        attachments: [{ url: 'https://example.com/cat.png', contentType: 'image/png' }]
+        attachments: [
+          { url: 'https://example.com/voice.silk', voiceWavUrl: 'https://example.com/voice.wav', contentType: 'voice' },
+          { url: 'https://example.com/cat.mp4', contentType: 'video/mp4' }
+        ]
       })
     )
+    assert.deepEqual(descriptions, ['voice', 'video/mp4'])
     const lastUser = llm.calls[0].messages[llm.calls[0].messages.length - 1]
-    assert.equal(lastUser.content, '[图片 image/png]')
+    assert.match(lastUser.content, /\[语音\]（语音内容：对方说晚上一起吃饭）/)
+    assert.match(lastUser.content, /\[视频 video\/mp4\]（视频内容：一只猫在跳舞）/)
+
+    const chat = await memoryStore.getChat('c2c_u1')
+    assert.match(chat.history[0].content, /语音内容：对方说晚上一起吃饭/)
   } finally {
     await cleanup()
+  }
+})
+
+test('入站媒体：描述失败或无描述器时降级为占位标记', async () => {
+  const failing = await setup({
+    describeIncomingMedia: async () => {
+      throw new Error('multimodal unavailable')
+    }
+  })
+  try {
+    await failing.engine.handleInbound(
+      makeInbound({
+        text: '',
+        attachments: [
+          { url: 'https://example.com/cat.png', contentType: 'image/png' },
+          { url: 'https://example.com/v.mp4', contentType: 'video/mp4' }
+        ]
+      })
+    )
+    const lastUser = failing.llm.calls[0].messages[failing.llm.calls[0].messages.length - 1]
+    assert.equal(lastUser.content, '[图片 image/png] [视频 video/mp4]')
+    assert.ok(failing.logger.entries.some((entry) => entry.level === 'warn'))
+  } finally {
+    await failing.cleanup()
+  }
+
+  const noDescriber = await setup()
+  try {
+    await noDescriber.engine.handleInbound(
+      makeInbound({ text: '', attachments: [{ url: 'https://example.com/a.png', contentType: 'image/png' }] })
+    )
+    const lastUser = noDescriber.llm.calls[0].messages[noDescriber.llm.calls[0].messages.length - 1]
+    assert.equal(lastUser.content, '[图片 image/png]')
+  } finally {
+    await noDescriber.cleanup()
   }
 })
 
@@ -489,6 +541,70 @@ test('compressChat / extractFacts 委托给对应模块', async () => {
     assert.deepEqual(await engine.compressChat('c2c_u1'), { compressed: true, removed: 4, summary: '摘要', chatId: 'c2c_u1' })
     assert.deepEqual(await engine.extractFacts('c2c_u1'), { extracted: true, facts: ['用户喜欢猫'], chatId: 'c2c_u1' })
     assert.deepEqual(await engine.compressChat(''), { compressed: false, removed: 0 })
+  } finally {
+    await cleanup()
+  }
+})
+
+test('群聊：只把当前发言者的成员事实注入 system prompt', async () => {
+  const { engine, llm, memoryStore, cleanup } = await setup()
+  try {
+    await memoryStore.addChatMemberFacts('group_g1', 'u1', ['小明喜欢猫'], { name: '小明' })
+    await memoryStore.addChatMemberFacts('group_g1', 'u2', ['小红喜欢狗'], { name: '小红' })
+    await engine.handleInbound(
+      makeInbound({ kind: 'group', chatId: 'group_g1', targetId: 'g1', userId: 'u1', userName: '小明', msgId: 'gm1', text: '在吗' })
+    )
+    const system = llm.calls[0].system
+    assert.ok(system.includes('【当前群成员「小明」的长期记忆】'))
+    assert.ok(system.includes('小明喜欢猫'))
+    assert.equal(system.includes('小红喜欢狗'), false)
+  } finally {
+    await cleanup()
+  }
+})
+
+test('群聊抽取传 speaker（isGroup=true）', async () => {
+  const { engine, extractor, cleanup } = await setup()
+  try {
+    await engine.handleInbound(
+      makeInbound({ kind: 'group', chatId: 'group_g1', targetId: 'g1', userId: 'u1', userName: '小明', msgId: 'gm1' })
+    )
+    await waitFor(() => extractor.calls.length === 1)
+    assert.deepEqual(extractor.calls[0], {
+      chatId: 'group_g1',
+      speaker: { userId: 'u1', name: '小明', isGroup: true }
+    })
+  } finally {
+    await cleanup()
+  }
+})
+
+test('单聊不读取成员事实文件，也不注入成员记忆段', async () => {
+  const { engine, llm, memoryStore, cleanup } = await setup()
+  try {
+    await memoryStore.addChatMemberFacts('c2c_u1', 'u1', ['小明喜欢猫'], { name: '小明' })
+    let memberReads = 0
+    const original = memoryStore.getChatMember.bind(memoryStore)
+    memoryStore.getChatMember = async (...args) => {
+      memberReads += 1
+      return original(...args)
+    }
+    await engine.handleInbound(makeInbound())
+    assert.equal(memberReads, 0)
+    assert.equal(llm.calls[0].system.includes('当前群成员'), false)
+    assert.equal(llm.calls[0].system.includes('小明喜欢猫'), false)
+  } finally {
+    await cleanup()
+  }
+})
+
+test('群聊没有成员事实时 prompt 不含成员记忆段', async () => {
+  const { engine, llm, cleanup } = await setup()
+  try {
+    await engine.handleInbound(
+      makeInbound({ kind: 'group', chatId: 'group_g1', targetId: 'g1', userId: 'u9', userName: '路人', msgId: 'gm9' })
+    )
+    assert.equal(llm.calls[0].system.includes('当前群成员'), false)
   } finally {
     await cleanup()
   }

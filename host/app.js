@@ -12,8 +12,9 @@ import { createMemoryStore } from './memory/store.js'
 import { createMemoryExtractor } from './memory/extract.js'
 import { createCompressor } from './memory/compress.js'
 import { createLlmClient } from './brain/llm.js'
-import { createVisionClient } from './vision/client.js'
-import { downloadImageBuffer } from './vision/download.js'
+import { createMultimodalClient } from './multimodal/client.js'
+import { downloadMediaBuffer } from './multimodal/download.js'
+import { attachmentAsrText, classifyAttachment, mediaDownloadUrl } from './util/media.js'
 import { createStickerStore } from './stickers/store.js'
 import { createStickerImporter } from './stickers/importer.js'
 import { createStickerSelector } from './stickers/selector.js'
@@ -22,7 +23,7 @@ import { createChatEngine } from './brain/chat.js'
 import { createQQClient } from './qq/index.js'
 import { registerAdminRoutes } from './admin/routes.js'
 
-export const PLUGIN_VERSION = '0.1.0'
+export const PLUGIN_VERSION = '0.2.0'
 
 /**
  * In-memory config controller: `loadConfig` at startup, atomic `saveConfig` for
@@ -82,13 +83,13 @@ function sanitizeConfigPatch(patch) {
     if (secretMissing) delete qq.appSecret
     out.qq = qq
   }
-  if (out.vision !== null && typeof out.vision === 'object') {
-    const vision = { ...out.vision }
-    const keyMissing = vision.apiKey === undefined || vision.apiKey === ''
-    delete vision.apiKeyMasked
-    delete vision.hasApiKey
-    if (keyMissing) delete vision.apiKey
-    out.vision = vision
+  if (out.multimodal !== null && typeof out.multimodal === 'object') {
+    const multimodal = { ...out.multimodal }
+    const keyMissing = multimodal.apiKey === undefined || multimodal.apiKey === ''
+    delete multimodal.apiKeyMasked
+    delete multimodal.hasApiKey
+    if (keyMissing) delete multimodal.apiKey
+    out.multimodal = multimodal
   }
   return out
 }
@@ -180,7 +181,7 @@ export async function createApp({ ctx, version = PLUGIN_VERSION } = {}) {
   const memoryStore = createMemoryStore({ paths, configStore, logger })
   const llmService = resolveService(ctx, 'llm')
   const llmClient = createLlmClient({ ctx: { llm: llmService }, configStore, logger })
-  const visionClient = createVisionClient({ configStore, logger })
+  const multimodalClient = createMultimodalClient({ configStore, logger })
   const stickerStore = createStickerStore({ paths, configStore, logger })
   const importer = createStickerImporter({ paths, configStore, stickerStore, logger })
   const stickerSelector = createStickerSelector({ stickerStore, configStore, logger })
@@ -207,32 +208,55 @@ export async function createApp({ ctx, version = PLUGIN_VERSION } = {}) {
   })
 
   /**
-   * Turn one inbound image attachment into a short text description using the
-   * optional OpenAI-compatible vision endpoint. Never throws: a failure simply
-   * degrades to the plain `[图片 ...]` marker.
+   * Describe one inbound media attachment (image / audio / video) through the
+   * optional multimodal recognizer. Never throws: a failure simply degrades to
+   * the plain marker in the chat history. QQ voice messages may already carry
+   * an ASR text, which is used as a free fallback for audio.
    */
-  const describeIncomingImage = async (attachment, inbound) => {
+  const describeIncomingMedia = async (attachment, inbound) => {
+    const kind = classifyAttachment(attachment)
+    const asrFallback = kind === 'audio' ? attachmentAsrText(attachment) : ''
     const config = configStore.get()
-    if (config.vision?.enabled !== true) return ''
-    if (attachment === null || typeof attachment?.url !== 'string' || attachment.url === '') return ''
+    const multimodal = config.multimodal
+    if (multimodal?.enabled !== true) return asrFallback
+    if (kind !== 'image' && kind !== 'audio' && kind !== 'video') return ''
+    if (multimodal[kind]?.enabled !== true) return asrFallback
+    const url = mediaDownloadUrl(attachment)
+    if (url === '') return asrFallback
     try {
-      const downloaded = await downloadImageBuffer({
-        url: attachment.url,
-        contentType: attachment.contentType,
-        maxBytes: Number(config.vision.maxImageBytes) || 8388608
-      })
-      const result = await visionClient.describeImage({
-        buffer: downloaded.buffer,
-        contentType: downloaded.contentType
-      })
-      return result.description
+      let result
+      if (kind === 'video' && multimodal.video?.mode === 'url') {
+        // URL mode hands the signed QQ video URL to the provider, so a local
+        // download is unnecessary (and may fail on short-lived URLs).
+        result = await multimodalClient.describe({
+          kind,
+          url,
+          fileName: attachment.filename,
+          contentType: attachment.contentType
+        })
+      } else {
+        const downloaded = await downloadMediaBuffer({
+          url,
+          contentType: attachment.contentType,
+          maxBytes: Number(multimodal.maxBytes) || 16777216
+        })
+        result = await multimodalClient.describe({
+          kind,
+          buffer: downloaded.buffer,
+          contentType: downloaded.contentType,
+          fileName: attachment.filename,
+          url
+        })
+      }
+      return result.text !== '' ? result.text : asrFallback
     } catch (error) {
-      logger.warn('入站图片视觉理解失败，已降级为文字占位', {
+      logger.warn('入站媒体识别失败，已降级为文字占位', {
         chatId: inbound?.chatId,
+        kind,
         code: error?.code,
         error: error?.message
       })
-      return ''
+      return asrFallback
     }
   }
 
@@ -264,7 +288,7 @@ export async function createApp({ ctx, version = PLUGIN_VERSION } = {}) {
     commandHandler,
     qqClient,
     logger,
-    describeIncomingImage,
+    describeIncomingMedia,
     captureIncomingImage: async (attachment, inbound) => {
       if (attachment === null || typeof attachment?.url !== 'string' || attachment.url === '') return undefined
       return importer.captureFromUrl({
@@ -289,7 +313,7 @@ export async function createApp({ ctx, version = PLUGIN_VERSION } = {}) {
     personaStore,
     memoryStore,
     llmClient,
-    visionClient,
+    multimodalClient,
     stickerStore,
     importer,
     stickerSelector,

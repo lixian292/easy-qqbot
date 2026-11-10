@@ -115,3 +115,43 @@ test('buildMessages 过滤空内容与非法角色，空历史时仍可只发用
   assert.deepEqual(buildMessages({ history: [], userMessage: '单独一句' }), [{ role: 'user', content: '单独一句' }])
   assert.deepEqual(buildMessages({ history: [] }), [])
 })
+
+test('群聊 buildSystemPrompt 追加当前发言者的长期记忆段', () => {
+  const prompt = buildSystemPrompt({
+    config: makeConfig(),
+    persona: makeConfig().persona,
+    facts: ['群里周末经常开黑'],
+    isGroupChat: true,
+    speakerFacts: [{ text: '小明喜欢猫' }, '小明住在杭州'],
+    speakerName: '小明'
+  })
+  assert.ok(prompt.includes('【当前群成员「小明」的长期记忆】'))
+  assert.ok(prompt.includes('小明喜欢猫'))
+  assert.ok(prompt.includes('小明住在杭州'))
+  assert.ok(prompt.includes('群里周末经常开黑'))
+})
+
+test('单聊或发言者事实为空时不输出群成员记忆段', () => {
+  const singleChat = buildSystemPrompt({
+    config: makeConfig(),
+    isGroupChat: false,
+    speakerFacts: ['小明喜欢猫'],
+    speakerName: '小明'
+  })
+  assert.ok(!singleChat.includes('当前群成员'))
+
+  const emptyFacts = buildSystemPrompt({
+    config: makeConfig(),
+    isGroupChat: true,
+    speakerFacts: [],
+    speakerName: '小明'
+  })
+  assert.ok(!emptyFacts.includes('当前群成员'))
+
+  const noName = buildSystemPrompt({
+    config: makeConfig(),
+    isGroupChat: true,
+    speakerFacts: ['喜欢猫']
+  })
+  assert.ok(noName.includes('【当前群成员「当前发言者」的长期记忆】'))
+})

@@ -67,7 +67,10 @@ function normalizeAttachments(list) {
   for (const item of list) {
     if (item === null || typeof item !== 'object') continue
     const url = firstString(item.url)
-    if (url === '') continue
+    // QQ voice messages expose the playable WAV through `voice_wav_url`; keep
+    // the attachment when either the raw url or the WAV url is present.
+    const voiceWavUrl = firstString(item.voice_wav_url, item.voiceWavUrl)
+    if (url === '' && voiceWavUrl === '') continue
     const attachment = { url }
     const contentType = firstString(item.content_type, item.contentType)
     if (contentType !== '') attachment.contentType = contentType
@@ -79,6 +82,9 @@ function normalizeAttachments(list) {
     if (Number.isFinite(height) && height > 0) attachment.height = height
     const size = Number(item.size)
     if (Number.isFinite(size) && size > 0) attachment.size = size
+    if (voiceWavUrl !== '') attachment.voiceWavUrl = voiceWavUrl
+    const asrReferText = firstString(item.asr_refer_text, item.asrReferText)
+    if (asrReferText !== '') attachment.asrReferText = asrReferText
     attachments.push(attachment)
   }
   return attachments

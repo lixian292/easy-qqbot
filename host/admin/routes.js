@@ -358,7 +358,7 @@ async function dispatch(method, args, app) {
         ms: Date.now() - started
       }
     }
-    case 'vision.test': {
+    case 'multimodal.test': {
       // 1x1 transparent PNG: proves URL/auth/model wiring without requiring a
       // sample upload. Providers normally answer "空白/透明图片".
       const pixel = Buffer.from(
@@ -366,7 +366,7 @@ async function dispatch(method, args, app) {
         'base64'
       )
       const started = Date.now()
-      const result = await app.visionClient.describeImage({ buffer: pixel, contentType: 'image/png' })
+      const result = await app.multimodalClient.describe({ kind: 'image', buffer: pixel, contentType: 'image/png' })
       return { ...result, ms: Date.now() - started }
     }
     case 'budget.snapshot':
@@ -471,7 +471,8 @@ async function dispatch(method, args, app) {
       const chatId = requireString(args, 'chatId')
       const chat = await app.memoryStore.getChat(chatId)
       const persona = await app.personaStore.get(chatId)
-      return { chat, persona }
+      const members = await readChatMembers(app, chatId)
+      return { chat, persona, members }
     }
     case 'chats.clear': {
       const chatId = requireString(args, 'chatId')
@@ -546,7 +547,7 @@ async function snapshot(app) {
     configWarnings: app.configStore.warnings(),
     status: app.qqClient.status(),
     llm: { provider: config.llm.provider, model: config.llm.model },
-    vision: readVisionStatus(app),
+    multimodal: readMultimodalStatus(app),
     budget,
     stickers: { total: stickerStats.total, byLayer: stickerStats.byLayer, tags: stickerStats.tags },
     chats: chats.length,
@@ -555,11 +556,21 @@ async function snapshot(app) {
   }
 }
 
-function readVisionStatus(app) {
+function readMultimodalStatus(app) {
   try {
-    return typeof app.visionClient?.status === 'function' ? app.visionClient.status() : null
+    return typeof app.multimodalClient?.status === 'function' ? app.multimodalClient.status() : null
   } catch {
     return null
+  }
+}
+
+async function readChatMembers(app, chatId) {
+  try {
+    if (typeof app.memoryStore?.listChatMembers !== 'function') return []
+    return await app.memoryStore.listChatMembers(chatId)
+  } catch (error) {
+    app.logger?.warn?.('读取群成员长期事实失败', { chatId, error: error?.message })
+    return []
   }
 }
 

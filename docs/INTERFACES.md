@@ -152,6 +152,9 @@ export function createMemoryStore({ paths, configStore, logger })
 | `async clearChat(chatId, {keepFacts=true})` | 清空历史与摘要；默认保留 facts |
 | `async getPerson(openid)` | `{id, name?, facts:[], messageCount, lastSeen, createdAt}` 或 `null` |
 | `async upsertPerson(openid, patch)` | patch: `{name?, addFacts?, messageCount?}`；返回 person |
+| `async getChatMember(chatId, userId)` | 群聊按发言者 ID 的长期事实：`{id, chatId, name, facts, messageCount, updatedAt}`；不存在返回空结构（不落盘） |
+| `async addChatMemberFacts(chatId, userId, facts, {name}={})` | 合并去重、上限 `config.memory.maxFacts`，写 `data/chats/<chatId>/members/<id>.json` |
+| `async listChatMembers(chatId)` | 该群所有成员事实（按 updatedAt 倒序） |
 | `async listPeople()` | 按 lastSeen 倒序 |
 | `async flush()` | 落盘所有脏数据 |
 
@@ -165,10 +168,10 @@ export function createMemoryExtractor({ configStore, llmClient, memoryStore, log
 
 | 方法 | 说明 |
 |---|---|
-| `async maybeExtract({ chatId, force=false })` | 距上次抽取的 userMessages 增量 ≥ `config.memory.extractEveryUserMessages` 或 force 时抽取；返回 `{ extracted: boolean, facts: string[] }` |
+| `async maybeExtract({ chatId, force=false, speaker })` | `speaker={userId,name,isGroup}`；抽取 `{chatFacts, memberFacts}`（兼容旧字符串数组）；群聊把 memberFacts 写入当前成员文件并 upsertPerson；返回 `{ extracted, facts, memberFacts, reason? }` |
 | `async extractNow(chatId)` | 强制抽取 |
 
-抽取逻辑：取该会话最近 20 条消息（含摘要），用 `llmClient.complete()` 让模型输出 JSON 字符串数组（最多 3 条、每条不超过 60 字、只记长期有价值的事实），容错解析（去掉 ```json 围栏、找第一个 `[`…最后一个 `]`）；失败只记 warn 日志，不抛错。成功后 `memoryStore.addFacts()`；可同时 `upsertPerson(userId)` 把关于用户的 facts 写入 people。system prompt 自己定义（中文）。
+抽取逻辑：取该会话最近 20 条消息（含摘要），用 `llmClient.complete()` 让模型输出 `{ "chatFacts": [...], "memberFacts": [...] }`（兼容纯字符串数组；最多 3 条、每条不超过 60 字、只记长期有价值的事实），容错解析；失败只记 warn 日志，不抛错。成功后 chatFacts → `memoryStore.addFacts()`；群聊 memberFacts → `addChatMemberFacts()` + `upsertPerson()`；单聊并入 chatFacts。
 
 ## 5. host/memory/compress.js
 
@@ -237,7 +240,7 @@ export function createCommandHandler({ configStore, budgetStore, memoryStore, st
 export function createChatEngine({
   configStore, personaStore, memoryStore, budgetStore, llmClient,
   compressor, extractor, stickerStore, stickerSelector, commandHandler,
-  qqClient, logger, captureIncomingImage
+  qqClient, logger, captureIncomingImage, describeIncomingMedia
 })
 ```
 
@@ -247,21 +250,21 @@ export function createChatEngine({
 | `async compressChat(chatId)` | 管理页用：强制压缩，返回 compressor 结果 |
 | `async extractFacts(chatId)` | 管理页用：强制抽取事实 |
 
-`captureIncomingImage(attachment, inbound)` 是可选注入函数（Lead 在 app.js 用 importer 实现），负责把入站图片抓进表情包候选库；实现里要防御 undefined。
+`captureIncomingImage(attachment, inbound)` 是可选注入函数（app.js 用 importer 实现），负责把入站图片抓进表情包候选库；`describeIncomingMedia(attachment, inbound)` 是可选注入函数（app.js 用多模态客户端实现），把图片/语音/视频转成描述文本；两者都要防御 undefined。
 
 处理流程（严格按此实现，便于测试）：
 
 1. `commandHandler.tryHandle(inbound)`；handled 则发 text/sticker 后返回。
-2. 入站图片：若 `config.stickers.enabled && config.stickers.captureIncoming`，对每个 attachment 触发 `stickerStore.captureFromUrl?` —— **由 chat.js 调用注入的 `captureIncomingImage`（可选函数）**，失败只记日志；并把 `[图片]` 写入用户消息内容。
+2. 入站媒体：图片在 `config.stickers.enabled && config.stickers.captureIncoming` 时调用 `captureIncomingImage` 入候选库；对所有 image/audio/video 附件调用 `describeIncomingMedia`，用 `describeMediaMarker` / `describeMediaWithText` 生成 `[图片...]` / `[语音]` / `[视频...]` 标记并写入用户消息内容。
 3. `budgetStore.check({chatId, userId})`；`allowed=false` 时：若距上次提示超过 `budget.blockCooldownMs`，发 `config.budget.blockMessage`；把用户消息与提示写入 memory；返回。
 4. `memoryStore.appendMessage(chatId, {role:'user', content, ts, userId, userName, msgId})`。
 5. 压缩：若 `persona.compressEnabled` → `compressor.maybeCompress(chatId)`。
-6. 组装：`history = memoryStore.history(chatId, persona.maxHistoryMessages)`；facts = chat.facts；summary；stickerCatalog = `stickerSelector.catalogText()`；`system = buildSystemPrompt(...)`；`messages = buildMessages(...)`。
-7. `llmClient.complete()`；成功 → `budgetStore.record()`；失败 → 记 warn，发一次兜底错误文案（"我这边刚刚走神了，再说一次？"），返回。
+6. 组装：`history = memoryStore.history(chatId, persona.maxHistoryMessages)`；facts = chat.facts；群聊额外 `memoryStore.getChatMember(chatId, inbound.userId)` 取当前发言者 facts/name；summary；stickerCatalog；`buildSystemPrompt({..., speakerFacts, speakerName, isGroupChat})`。
+7. `llmClient.complete()`；成功 → `budgetStore.record()`；失败 → 记 warn，发一次兜底错误文案，返回。
 8. 解析 `parseStickerDirectives(text)`；清理 Markdown → `stripMarkdown`；截断到 `persona.replyMaxChars`。
 9. 发送：先文字（如果有），再表情包：显式指令优先 `stickerSelector.pickForReply(tags)`；否则按 `stickerChance` 在回复文本命中标签时 `stickerSelector.maybeStickerFromText()`；发送失败降级为纯文字。
 10. `memoryStore.appendMessage(chatId, {role:'assistant', content: finalText, ts})`。
-11. 异步（不 await，catch 后仅记日志）：`extractor.maybeExtract({chatId})`。
+11. 异步（不 await，catch 后仅记日志）：`extractor.maybeExtract({ chatId, speaker: { userId, name, isGroup } })`。
 
 ## 10. host/stickers/store.js
 

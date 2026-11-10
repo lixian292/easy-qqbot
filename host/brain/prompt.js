@@ -51,12 +51,33 @@ export function buildStickerInstruction({ stickerCatalog, stickerChance } = {}) 
 
 /**
  * Build the full system prompt: persona, style, time, long-term facts,
- * dialogue summary and the sticker directive (only when enabled + non-empty).
+ * dialogue summary, the current group speaker's own facts (group chats only)
+ * and the sticker directive (only when enabled + non-empty).
  *
- * @param {{ config?: object, persona?: object, facts?: Array<string|object>, summary?: object|string, stickerCatalog?: string, now?: number }} [options]
+ * @param {{
+ *   config?: object,
+ *   persona?: object,
+ *   facts?: Array<string|object>,
+ *   summary?: object|string,
+ *   stickerCatalog?: string,
+ *   now?: number,
+ *   speakerFacts?: Array<string|object>,
+ *   speakerName?: string,
+ *   isGroupChat?: boolean
+ * }} [options]
  * @returns {string}
  */
-export function buildSystemPrompt({ config, persona, facts = [], summary, stickerCatalog, now = Date.now() } = {}) {
+export function buildSystemPrompt({
+  config,
+  persona,
+  facts = [],
+  summary,
+  stickerCatalog,
+  now = Date.now(),
+  speakerFacts = [],
+  speakerName = '',
+  isGroupChat = false
+} = {}) {
   const configObject = isPlainObject(config) ? config : {}
   const basePersona = isPlainObject(configObject.persona) ? configObject.persona : {}
   const override = isPlainObject(persona) ? persona : {}
@@ -79,6 +100,16 @@ export function buildSystemPrompt({ config, persona, facts = [], summary, sticke
   const remembered = factTexts(facts)
   if (remembered.length > 0) {
     sections.push(`【长期记忆】\n${remembered.map((text) => `- ${text}`).join('\n')}`)
+  }
+
+  // Group chats remember facts per speaker id: only the current speaker's own
+  // record is relevant; other members' facts must never leak into the prompt.
+  if (isGroupChat === true) {
+    const speakerRemembered = factTexts(speakerFacts)
+    if (speakerRemembered.length > 0) {
+      const speakerLabel = String(speakerName ?? '').trim() || '当前发言者'
+      sections.push(`【当前群成员「${speakerLabel}」的长期记忆】\n${speakerRemembered.map((text) => `- ${text}`).join('\n')}`)
+    }
   }
 
   const dialogueSummary = summaryText(summary)

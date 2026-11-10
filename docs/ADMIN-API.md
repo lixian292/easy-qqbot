@@ -22,12 +22,13 @@
 
 ```js
 {
-  version: '0.1.0',
+  version: '0.2.0',
   dataDir: string,
   configWarnings: string[],
   status: { enabled, hasCredentials, state, bot, sessionId, connectedAt, lastHeartbeatAt, lastInboundAt,
             lastError, sent, received, attempts },
   llm: { provider, model },
+  multimodal: { enabled, configured, baseUrl, image:{...}, audio:{...}, video:{...} } | null,
   budget: BudgetSnapshot,          // 见 budget.snapshot
   stickers: { total, byLayer: {library,candidate,negative,trash}, tags: number },
   chats: number,
@@ -38,9 +39,9 @@
 
 ### 2.2 配置
 
-- `config.get` → `{ config: PublicConfig, warnings: string[] }`。`qq.appSecret` 恒为 `''`，并带 `qq.appSecretMasked`、`qq.hasSecret`。
+- `config.get` → `{ config: PublicConfig, warnings: string[] }`。`qq.appSecret` 恒为 `''`，并带 `qq.appSecretMasked`、`qq.hasSecret`；`multimodal.apiKey` 同样只返回空串 + `multimodal.apiKeyMasked` + `multimodal.hasApiKey`。
 - `config.save` args `{ patch: object }` → `{ config: PublicConfig, warnings: string[] }`。
-  - `patch` 为深层局部覆盖；`qq.appSecret` 留空表示保留原密钥。
+  - `patch` 为深层局部覆盖；`qq.appSecret` / `multimodal.apiKey` 留空表示保留原密钥。
   - 保存后插件会按新配置自动重启 QQ 连接（页面可延迟 1s 刷新状态）。
 
 ### 2.3 QQ 连接
@@ -54,11 +55,12 @@
 
 `llm.test` args `{ prompt?: string }` → `{ text, provider, model, usage: {inputTokens,outputTokens,totalTokens} }`；失败返回 `{ok:false,error}`（错误信息由 admin 层包装）。
 
-### 2.4.1 视觉模型自检（可选）
+### 2.4.1 多模态识别自检（可选）
 
-`vision.test` → 用内置 1×1 PNG 调用已配置的 OpenAI 兼容视觉接口，返回 `{ description, model, usage, ms }`；
-未启用/未配置/接口失败时返回 `{ok:false,error}`。`snapshot` 中的 `vision` 字段给出 `{enabled, configured, baseUrl, model, hasApiKey}`。
-`config` 的 `vision.apiKey` 与 `qq.appSecret` 一样只写不读（响应里为空串 + 掩码 + `hasApiKey`）。
+`multimodal.test` → 用内置 1×1 PNG 调用已配置的 OpenAI 兼容视觉接口，返回 `{ text, model, usage, ms }`；
+未启用/未配置/接口失败时返回 `{ok:false,error}`。`snapshot` 中的 `multimodal` 字段给出
+`{enabled, configured, baseUrl, image:{enabled,configured,model}, audio:{...}, video:{...}}`。
+`config` 的 `multimodal.apiKey` 与 `qq.appSecret` 一样只写不读（响应里为空串 + 掩码 + `hasApiKey`）。
 
 ### 2.5 预算
 
@@ -83,7 +85,7 @@
 ### 2.7 会话与记忆
 
 - `chats.list` args `{ query? }` → `{ chats: [{chatId,title,kind,messageCount,userMessages,lastAt,summaryChars,factsCount}] }`
-- `chats.get` args `{ chatId }` → `{ chat: {id, title, history: ChatMessage[], summary, facts, counters}, persona: object|null }`
+- `chats.get` args `{ chatId }` → `{ chat: {id, title, history: ChatMessage[], summary, facts, counters}, persona: object|null, members: [{id,name,facts,messageCount,updatedAt}] }`（群聊成员按发言者 ID 的长期事实；单聊可为空数组）
 - `chats.clear` args `{ chatId, keepFacts?: true }` → `{ ok: true }`
 - `chats.compress` args `{ chatId }` → `{ compressed, removed, summary?, error? }`
 - `chats.extract` args `{ chatId }` → `{ extracted, facts: string[] }`
@@ -108,7 +110,7 @@
    普通标签页优先 `history.back()`，没有历史时 `location.assign('/')` 跳回 DSH；无弹窗时按 Esc 也可退出。
 2. 左侧/顶部 Tab：**概览 / 配置 / 表情包 / 预算 / 会话 / 人员 / 日志**。
 3. **概览**：状态卡片（QQ 状态、机器人名、模型、预算今日用量/限额进度条、表情包统计、会话数）；按钮：启动/停止/重连、测试 QQ 凭证、测试 LLM（显示返回文本与耗时）；配置警告列表。
-4. **配置**：分区表单（QQ 接入、LLM、人设、预算、记忆与压缩、表情包、命令与管理员、日志），保存按钮 + 恢复默认提示；AppSecret 显示掩码，输入留空不改；保存后 toast。
+4. **配置**：分区表单（QQ 接入、LLM、多模态识别、人设、预算、记忆与压缩、表情包、命令与管理员、日志），保存按钮 + 恢复默认提示；AppSecret / 多模态 API Key 显示掩码，输入留空不改；保存后 toast。
 5. **表情包**：最关键页面。
    - 工具栏：图层 Tab（全部/正式库/候选/负面/回收站，带数量）、搜索框（标签/描述/id）、标签筛选 chips、「扫描 import 目录」按钮、上传文件按钮（`<input type=file multiple accept=image/*>`，转 base64 提交）。
    - 网格卡片：缩略图（`/qqbot/media/sticker/<id>`）、勾选框、id、图层徽标、标签 chips、使用次数；点击卡片打开右侧/弹层编辑：图片预览、标签输入（逗号分隔 + 已有标签 chips 可点选）、描述、图层下拉、保存/删除。

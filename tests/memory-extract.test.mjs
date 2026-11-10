@@ -1,9 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs/promises'
+import path from 'node:path'
 
 import { makeConfigStore, makeFakeLlm, makeLogger, makeTempPaths } from './helpers.mjs'
 import { createMemoryStore } from '../host/memory/store.js'
-import { createMemoryExtractor, parseExtractedFacts } from '../host/memory/extract.js'
+import { createMemoryExtractor, parseExtractedFacts, parseExtractedMemory } from '../host/memory/extract.js'
 
 async function setup({ config = {}, llm = makeFakeLlm({ reply: '[]' }) } = {}) {
   const { paths, cleanup } = await makeTempPaths()
@@ -182,4 +184,153 @@ test('parseExtractedFacts 容错解析多种输出格式', () => {
   assert.deepEqual(parseExtractedFacts('结果是 "喜欢猫" 和 "住在杭州"。'), ['喜欢猫', '住在杭州'])
   assert.deepEqual(parseExtractedFacts(''), [])
   assert.deepEqual(parseExtractedFacts('完全没有信息'), [])
+})
+
+function groupSpeaker(userId = 'u1', name = '小明') {
+  return { userId, name, isGroup: true }
+}
+
+test('群聊：对象输出分别写 chatFacts / memberFacts，并 upsertPerson', async () => {
+  const reply = JSON.stringify({ chatFacts: ['群规：周末晚上开黑'], memberFacts: ['小明喜欢猫'] })
+  const { cleanup, memoryStore, extractor } = await setup({ llm: makeFakeLlm({ reply }) })
+  try {
+    await seedConversation(memoryStore, 'group_g1', 1)
+    const result = await extractor.maybeExtract({ chatId: 'group_g1', force: true, speaker: groupSpeaker() })
+    assert.equal(result.extracted, true)
+    assert.deepEqual(result.facts, ['群规：周末晚上开黑'])
+    assert.deepEqual(result.memberFacts, ['小明喜欢猫'])
+
+    const chat = await memoryStore.getChat('group_g1')
+    assert.deepEqual(chat.facts.map((fact) => fact.text), ['群规：周末晚上开黑'])
+
+    const member = await memoryStore.getChatMember('group_g1', 'u1')
+    assert.equal(member.name, '小明')
+    assert.deepEqual(member.facts.map((fact) => fact.text), ['小明喜欢猫'])
+
+    const person = await memoryStore.getPerson('u1')
+    assert.equal(person.name, '小明')
+    assert.deepEqual(person.facts, ['小明喜欢猫'])
+  } finally {
+    await cleanup()
+  }
+})
+
+test('群聊：不同发言者的成员事实文件互相独立', async () => {
+  let call = 0
+  const replies = [
+    JSON.stringify({ chatFacts: [], memberFacts: ['小明喜欢猫'] }),
+    JSON.stringify({ chatFacts: [], memberFacts: ['小红喜欢狗'] })
+  ]
+  const { cleanup, memoryStore, extractor } = await setup({
+    llm: makeFakeLlm({
+      reply: () => replies[Math.min(call++, replies.length - 1)]
+    })
+  })
+  try {
+    await seedConversation(memoryStore, 'group_g1', 1, { userId: 'u1', userName: '小明' })
+    await extractor.maybeExtract({ chatId: 'group_g1', force: true, speaker: groupSpeaker('u1', '小明') })
+
+    await seedConversation(memoryStore, 'group_g1', 1, { userId: 'u2', userName: '小红' })
+    await extractor.maybeExtract({ chatId: 'group_g1', force: true, speaker: groupSpeaker('u2', '小红') })
+
+    const members = await memoryStore.listChatMembers('group_g1')
+    assert.equal(members.length, 2)
+    const byId = Object.fromEntries(members.map((member) => [member.id, member.facts.map((fact) => fact.text)]))
+    assert.deepEqual(byId.u1, ['小明喜欢猫'])
+    assert.deepEqual(byId.u2, ['小红喜欢狗'])
+    // Nothing about either member leaked into the shared chat facts.
+    assert.deepEqual((await memoryStore.getChat('group_g1')).facts, [])
+  } finally {
+    await cleanup()
+  }
+})
+
+test('单聊：memberFacts 归入 chatFacts，不写成员文件', async () => {
+  const reply = JSON.stringify({ chatFacts: [], memberFacts: ['用户喜欢猫'] })
+  const { paths, cleanup, memoryStore, extractor } = await setup({ llm: makeFakeLlm({ reply }) })
+  try {
+    await seedConversation(memoryStore, 'c2c_u1', 1)
+    const result = await extractor.maybeExtract({
+      chatId: 'c2c_u1',
+      force: true,
+      speaker: { userId: 'u1', name: '小明', isGroup: false }
+    })
+    assert.equal(result.extracted, true)
+    assert.deepEqual(result.facts, ['用户喜欢猫'])
+    assert.deepEqual(result.memberFacts, [])
+    assert.deepEqual((await memoryStore.getChat('c2c_u1')).facts.map((fact) => fact.text), ['用户喜欢猫'])
+    assert.deepEqual(await memoryStore.listChatMembers('c2c_u1'), [])
+    await assert.rejects(fs.access(path.join(paths.chatDir('c2c_u1'), 'members')))
+  } finally {
+    await cleanup()
+  }
+})
+
+test('群聊：重复的成员事实返回 duplicate 且不新增', async () => {
+  const reply = JSON.stringify({ chatFacts: [], memberFacts: ['小明喜欢猫'] })
+  const { cleanup, memoryStore, extractor } = await setup({ llm: makeFakeLlm({ reply }) })
+  try {
+    await seedConversation(memoryStore, 'group_g1', 1)
+    await memoryStore.addChatMemberFacts('group_g1', 'u1', ['小明喜欢猫'], { name: '小明' })
+    const result = await extractor.maybeExtract({ chatId: 'group_g1', force: true, speaker: groupSpeaker() })
+    assert.equal(result.extracted, false)
+    assert.equal(result.reason, 'duplicate')
+    assert.deepEqual(result.memberFacts, [])
+    assert.equal((await memoryStore.getChatMember('group_g1', 'u1')).facts.length, 1)
+  } finally {
+    await cleanup()
+  }
+})
+
+test('群聊：speaker 缺少 userId 时 memberFacts 归入 chatFacts', async () => {
+  const reply = JSON.stringify({ chatFacts: ['群友喜欢猫'], memberFacts: ['某人喜欢狗'] })
+  const { cleanup, memoryStore, extractor } = await setup({ llm: makeFakeLlm({ reply }) })
+  try {
+    await seedConversation(memoryStore, 'group_g1', 1)
+    const result = await extractor.maybeExtract({
+      chatId: 'group_g1',
+      force: true,
+      speaker: { name: '匿名', isGroup: true }
+    })
+    assert.equal(result.extracted, true)
+    assert.deepEqual(result.facts, ['群友喜欢猫', '某人喜欢狗'])
+    assert.deepEqual(result.memberFacts, [])
+    assert.deepEqual(await memoryStore.listChatMembers('group_g1'), [])
+  } finally {
+    await cleanup()
+  }
+})
+
+test('群聊抽取时给模型的 prompt 包含当前发言者与已有成员记忆', async () => {
+  const reply = JSON.stringify({ chatFacts: [], memberFacts: ['小明喜欢猫'] })
+  const { cleanup, memoryStore, extractor, llm } = await setup({ llm: makeFakeLlm({ reply }) })
+  try {
+    await seedConversation(memoryStore, 'group_g1', 1)
+    await memoryStore.addChatMemberFacts('group_g1', 'u1', ['小明住在杭州'], { name: '小明' })
+    await extractor.maybeExtract({ chatId: 'group_g1', force: true, speaker: groupSpeaker() })
+    const prompt = llm.calls[0].messages[0].content
+    assert.ok(prompt.includes('当前发言者'))
+    assert.ok(prompt.includes('小明住在杭州'))
+    assert.ok(prompt.includes('chatFacts'))
+    assert.ok(prompt.includes('memberFacts'))
+  } finally {
+    await cleanup()
+  }
+})
+
+test('parseExtractedMemory 支持对象 / 旧数组 / 兼容键名', () => {
+  assert.deepEqual(parseExtractedMemory('{"chatFacts":["a"],"memberFacts":["b"]}'), {
+    chatFacts: ['a'],
+    memberFacts: ['b']
+  })
+  assert.deepEqual(parseExtractedMemory('好的：\n```json\n{"facts":["x"],"memberFacts":["y"]}\n```'), {
+    chatFacts: ['x'],
+    memberFacts: ['y']
+  })
+  assert.deepEqual(parseExtractedMemory('["a","b"]'), { chatFacts: ['a', 'b'], memberFacts: [] })
+  assert.deepEqual(parseExtractedMemory('{"chat_facts":["x"],"member_facts":["y"]}'), {
+    chatFacts: ['x'],
+    memberFacts: ['y']
+  })
+  assert.deepEqual(parseExtractedMemory(''), { chatFacts: [], memberFacts: [] })
 })

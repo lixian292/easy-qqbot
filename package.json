@@ -1,7 +1,7 @@
 {
   "name": "easy-qqbot",
-  "version": "0.1.0",
-  "description": "A simple, easy-to-use QQ bot plugin for DeepSeek Harness: budget control, long-term memory, context compression, personalization, batch sticker import/tagging and sticker replies. All code and data live inside this package directory.",
+  "version": "0.2.0",
+  "description": "A simple, easy-to-use QQ bot plugin for DeepSeek Harness: budget control, long-term memory (per-speaker in groups), context compression, personalization, optional multimodal recognition for images/audio/video, batch sticker import/tagging and sticker replies. All code and data live inside this package directory.",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -39,7 +39,8 @@
     "dsh",
     "dsh-plugin",
     "cordis",
-    "sticker"
+    "sticker",
+    "multimodal"
   ],
   "license": "MIT",
   "author": "lixian292",

@@ -20,7 +20,7 @@ function makeFakeApp() {
     updatedAt: 1
   }
   const app = {
-    version: '0.1.0',
+    version: '0.2.0',
     calls,
     paths: { data: 'D:\\tmp\\qqbot-data' },
     logger: {
@@ -67,7 +67,8 @@ function makeFakeApp() {
       async getChat(chatId) { return { id: chatId, history: [], facts: [] } },
       async clearChat() {},
       async listPeople() { return [] },
-      async upsertPerson(openid, patch) { return { id: openid, ...patch } }
+      async upsertPerson(openid, patch) { return { id: openid, ...patch } },
+      async listChatMembers() { return [{ id: 'member-1', name: '小明', facts: [{ text: '喜欢猫' }], messageCount: 2, updatedAt: 1 }] }
     },
     stickerStore: {
       async list() { return { total: 1, items: [sticker] } },
@@ -96,7 +97,7 @@ function makeFakeApp() {
 test('snapshot aggregates status, budget, stickers and chats', async () => {
   const app = makeFakeApp()
   const snapshot = await dispatchAdminMethod('snapshot', {}, app)
-  assert.equal(snapshot.version, '0.1.0')
+  assert.equal(snapshot.version, '0.2.0')
   assert.equal(snapshot.status.state, 'standby')
   assert.equal(snapshot.stickers.total, 1)
   assert.equal(snapshot.chats, 1)
@@ -124,6 +125,15 @@ test('stickers.batchUpdate rejects empty ids and merges tags', async () => {
   await assert.rejects(() => dispatchAdminMethod('stickers.batchUpdate', { ids: [] }, app), /ids/)
   const result = await dispatchAdminMethod('stickers.batchUpdate', { ids: ['abcdef123456'], addTags: ['新'] }, app)
   assert.equal(result.updated, 1)
+})
+
+test('chats.get includes per-speaker member facts for group chats', async () => {
+  const app = makeFakeApp()
+  const result = await dispatchAdminMethod('chats.get', { chatId: 'group_1' }, app)
+  assert.equal(result.chat.id, 'group_1')
+  assert.equal(result.members.length, 1)
+  assert.equal(result.members[0].id, 'member-1')
+  assert.equal(result.members[0].facts[0].text, '喜欢猫')
 })
 
 test('unknown admin method throws a descriptive error', async () => {

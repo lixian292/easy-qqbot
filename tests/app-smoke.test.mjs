@@ -75,7 +75,7 @@ test('createApp boots with fake services, serves admin API and disposes cleanly'
         assert.equal(registeredRoutes[0].kind, 'prefix')
 
         const snapshot = await dispatchAdminMethod('snapshot', {}, app)
-        assert.equal(snapshot.version, '0.1.0')
+        assert.equal(snapshot.version, '0.2.0')
         assert.equal(snapshot.status.state ?? 'standby', 'standby')
         assert.equal(snapshot.chats, 0)
 
@@ -86,18 +86,28 @@ test('createApp boots with fake services, serves admin API and disposes cleanly'
         const saved = await dispatchAdminMethod('config.save', { patch: { persona: { name: '测试机器人' } } }, app)
         assert.equal(saved.config.persona.name, '测试机器人')
 
-        // Vision API key is write-only: saved, masked on read, and preserved when
-        // a later patch leaves the secret field blank.
+        // Multimodal API key is write-only: saved, masked on read, and preserved
+        // when a later patch leaves the secret field blank.
         const savedVision = await dispatchAdminMethod(
           'config.save',
-          { patch: { vision: { enabled: true, baseUrl: 'https://api.example.com/v1', apiKey: 'sk-vision-secret', model: 'vl-model' } } },
+          {
+            patch: {
+              multimodal: {
+                enabled: true,
+                baseUrl: 'https://api.example.com/v1',
+                apiKey: 'sk-multimodal-secret',
+                image: { enabled: true, model: 'vl-model' }
+              }
+            }
+          },
           app
         )
-        assert.equal(savedVision.config.vision.apiKey, '')
-        assert.equal(savedVision.config.vision.hasApiKey, true)
-        const savedVisionAgain = await dispatchAdminMethod('config.save', { patch: { vision: { enabled: false } } }, app)
-        assert.equal(savedVisionAgain.config.vision.hasApiKey, true)
-        assert.equal(savedVisionAgain.config.vision.enabled, false)
+        assert.equal(savedVision.config.multimodal.apiKey, '')
+        assert.equal(savedVision.config.multimodal.hasApiKey, true)
+        assert.equal(savedVision.config.multimodal.image.model, 'vl-model')
+        const savedVisionAgain = await dispatchAdminMethod('config.save', { patch: { multimodal: { enabled: false } } }, app)
+        assert.equal(savedVisionAgain.config.multimodal.hasApiKey, true)
+        assert.equal(savedVisionAgain.config.multimodal.enabled, false)
 
         const stats = await dispatchAdminMethod('stickers.stats', {}, app)
         assert.equal(stats.total, 0)

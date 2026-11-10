@@ -242,3 +242,118 @@ test('flush 后新实例可以读回历史、摘要与事实', async () => {
     await cleanup()
   }
 })
+
+test('getChatMember 对不存在的成员返回空结构且不落盘', async () => {
+  const { paths, cleanup, store } = await setup()
+  try {
+    const member = await store.getChatMember('group_g1', 'u1')
+    assert.deepEqual(member, {
+      version: 1,
+      id: 'u1',
+      chatId: 'group_g1',
+      name: '',
+      facts: [],
+      messageCount: 0,
+      updatedAt: 0
+    })
+    await assert.rejects(fs.access(path.join(paths.chatDir('group_g1'), 'members')))
+    assert.deepEqual(await store.listChatMembers('group_g1'), [])
+  } finally {
+    await cleanup()
+  }
+})
+
+test('addChatMemberFacts 落盘成员文件（结构/去重/名称）', async () => {
+  const { paths, cleanup, store } = await setup()
+  try {
+    const member = await store.addChatMemberFacts('group_g1', 'u1', ['小明喜欢猫', '  小明喜欢猫  '], { name: '小明' })
+    assert.equal(member.id, 'u1')
+    assert.equal(member.chatId, 'group_g1')
+    assert.equal(member.name, '小明')
+    assert.deepEqual(member.facts.map((fact) => fact.text), ['小明喜欢猫'])
+    assert.ok(member.updatedAt > 0)
+
+    const file = path.join(paths.chatDir('group_g1'), 'members', 'u1.json')
+    const raw = JSON.parse(await fs.readFile(file, 'utf8'))
+    assert.equal(raw.version, 1)
+    assert.equal(raw.id, 'u1')
+    assert.equal(raw.chatId, 'group_g1')
+    assert.equal(raw.name, '小明')
+    assert.equal(raw.facts.length, 1)
+    assert.equal(raw.messageCount, 0)
+    assert.ok(raw.updatedAt > 0)
+
+    const loaded = await store.getChatMember('group_g1', 'u1')
+    assert.equal(loaded.name, '小明')
+    assert.deepEqual(loaded.facts.map((fact) => fact.text), ['小明喜欢猫'])
+  } finally {
+    await cleanup()
+  }
+})
+
+test('群成员事实按成员文件独立存储并按 updatedAt 倒序', async () => {
+  const { paths, cleanup, store } = await setup()
+  try {
+    await store.addChatMemberFacts('group_g1', 'u1', ['小明喜欢猫'], { name: '小明' })
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    await store.addChatMemberFacts('group_g1', 'u2', ['小红喜欢狗'], { name: '小红' })
+
+    const u1 = await store.getChatMember('group_g1', 'u1')
+    const u2 = await store.getChatMember('group_g1', 'u2')
+    assert.deepEqual(u1.facts.map((fact) => fact.text), ['小明喜欢猫'])
+    assert.deepEqual(u2.facts.map((fact) => fact.text), ['小红喜欢狗'])
+    await fs.access(path.join(paths.chatDir('group_g1'), 'members', 'u1.json'))
+    await fs.access(path.join(paths.chatDir('group_g1'), 'members', 'u2.json'))
+
+    const members = await store.listChatMembers('group_g1')
+    assert.equal(members.length, 2)
+    assert.equal(members[0].id, 'u2')
+    assert.equal(members[1].id, 'u1')
+
+    // Different chats keep separate member stores.
+    await store.addChatMemberFacts('group_g2', 'u1', ['另一个群的记忆'])
+    assert.deepEqual((await store.getChatMember('group_g2', 'u1')).facts.map((fact) => fact.text), ['另一个群的记忆'])
+    assert.deepEqual((await store.getChatMember('group_g1', 'u1')).facts.map((fact) => fact.text), ['小明喜欢猫'])
+  } finally {
+    await cleanup()
+  }
+})
+
+test('群成员事实去重并遵守 config.memory.maxFacts', async () => {
+  const { cleanup, store } = await setup({ config: { memory: { maxFacts: 2 } } })
+  try {
+    await store.addChatMemberFacts('group_g1', 'u1', ['喜欢猫', '喜欢狗'])
+    await store.addChatMemberFacts('group_g1', 'u1', ['喜欢猫', '住在杭州'])
+    let member = await store.getChatMember('group_g1', 'u1')
+    assert.deepEqual(member.facts.map((fact) => fact.text), ['喜欢狗', '住在杭州'])
+
+    await store.addChatMemberFacts('group_g1', 'u1', ['喜欢爬山'])
+    member = await store.getChatMember('group_g1', 'u1')
+    assert.deepEqual(member.facts.map((fact) => fact.text), ['住在杭州', '喜欢爬山'])
+  } finally {
+    await cleanup()
+  }
+})
+
+test('群成员事实可被新实例读回，损坏文件会备份', async () => {
+  const { paths, cleanup, configStore } = await setup()
+  try {
+    const store = createMemoryStore({ paths, configStore })
+    await store.addChatMemberFacts('group_g1', 'u1', ['小明喜欢猫'], { name: '小明' })
+    await store.flush()
+
+    const reloaded = createMemoryStore({ paths, configStore, logger: makeLogger() })
+    const member = await reloaded.getChatMember('group_g1', 'u1')
+    assert.equal(member.name, '小明')
+    assert.deepEqual(member.facts.map((fact) => fact.text), ['小明喜欢猫'])
+
+    const file = path.join(paths.chatDir('group_g1'), 'members', 'u1.json')
+    await fs.writeFile(file, '{broken member json', 'utf8')
+    const broken = await reloaded.getChatMember('group_g1', 'u1')
+    assert.deepEqual(broken.facts, [])
+    const names = await fs.readdir(path.join(paths.chatDir('group_g1'), 'members'))
+    assert.ok(names.some((name) => name.startsWith('u1.json.corrupt-')))
+  } finally {
+    await cleanup()
+  }
+})

@@ -237,8 +237,8 @@ export function cleanQqText(text) {
 
 /**
  * Human/LLM-readable marker for one inbound image attachment. The plugin does
- * not perform vision inference, so size + media type are the only facts the
- * text-only model can be given.
+ * not perform recognition here, so size + media type are the only facts the
+ * text-only model can be given; the multimodal recognizer adds descriptions.
  */
 export function describeImageMarker(attachment) {
   const width = Number(attachment?.width)

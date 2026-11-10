@@ -7,6 +7,7 @@
  *   data/chats/<encodeURIComponent(chatId)>/summary.json
  *   data/chats/<encodeURIComponent(chatId)>/memory.json
  *   data/chats/<encodeURIComponent(chatId)>/state.json
+ *   data/chats/<encodeURIComponent(chatId)>/members/<encodeURIComponent(userId)>.json
  *   data/people/<encodeURIComponent(openid)>.json
  *
  * JSON files are replaced atomically; history appends are serialized through a
@@ -23,6 +24,7 @@ const HISTORY_FILE = 'history.jsonl'
 const SUMMARY_FILE = 'summary.json'
 const MEMORY_FILE = 'memory.json'
 const STATE_FILE = 'state.json'
+const MEMBERS_DIR = 'members'
 const MAX_FACT_CHARS = 200
 const MAX_PERSON_FACTS = 50
 const DEFAULT_HISTORY_LIMIT = 40
@@ -145,6 +147,49 @@ function normalizePerson(id, raw) {
   return person
 }
 
+/** Empty per-chat member record; never persisted on its own. */
+function emptyChatMember(chatId, userId) {
+  return {
+    version: 1,
+    id: userId,
+    chatId,
+    name: '',
+    facts: [],
+    messageCount: 0,
+    updatedAt: 0
+  }
+}
+
+/**
+ * Normalize one `data/chats/<chatId>/members/<userId>.json` record, keeping
+ * only the fields documented in MULTIMODAL-MEMBER-DESIGN §5.1.
+ */
+function normalizeChatMember(raw, chatId, userId) {
+  const member = emptyChatMember(chatId, userId)
+  if (!isPlainObject(raw)) return member
+  member.name = typeof raw.name === 'string' ? raw.name.trim().slice(0, 64) : ''
+  member.facts = normalizeFacts(Array.isArray(raw.facts) ? raw.facts : []).map((fact) => ({
+    id: fact.id,
+    text: fact.text,
+    createdAt: fact.createdAt
+  }))
+  member.messageCount = integerOrZero(raw.messageCount)
+  member.updatedAt = integerOrZero(raw.updatedAt)
+  return member
+}
+
+function cloneChatMember(member) {
+  return {
+    version: member.version,
+    id: member.id,
+    chatId: member.chatId,
+    name: member.name,
+    facts: member.facts.map((fact) => ({ ...fact })),
+    messageCount: member.messageCount,
+    updatedAt: member.updatedAt
+  }
+}
+
 /**
  * @param {{ paths: object, configStore: { get(): object }, logger?: object }} deps
  */
@@ -206,6 +251,14 @@ export function createMemoryStore({ paths, configStore, logger } = {}) {
 
   function personFile(openid) {
     return path.join(paths.people, `${encodeURIComponent(String(openid))}.json`)
+  }
+
+  function memberFile(chatId, userId) {
+    return path.join(paths.chatDir(chatId), MEMBERS_DIR, `${encodeURIComponent(String(userId))}.json`)
+  }
+
+  function memberDir(chatId) {
+    return path.join(paths.chatDir(chatId), MEMBERS_DIR)
   }
 
   function stateOf(entry) {
@@ -454,9 +507,118 @@ export function createMemoryStore({ paths, configStore, logger } = {}) {
     return entry.facts.map((fact) => ({ ...fact }))
   }
 
+  // ---- per-chat member facts (group chats) ---------------------------------
+
+  /** One member's long-term facts inside a group chat. Empty structure when absent. */
+  async function getChatMember(chatId, userId) {
+    await ensureReady()
+    const chatKey = String(chatId ?? '')
+    const userKey = String(userId ?? '')
+    if (chatKey === '' || userKey === '') return emptyChatMember(chatKey, userKey)
+    const file = memberFile(chatKey, userKey)
+    let raw
+    try {
+      raw = await readJson(file, undefined)
+    } catch (error) {
+      await backupCorrupt(file)
+      logger?.warn?.('群成员记忆文件损坏，已备份', { chatId: chatKey, userId: userKey, error: error?.message })
+      return emptyChatMember(chatKey, userKey)
+    }
+    if (raw === undefined) return emptyChatMember(chatKey, userKey)
+    return cloneChatMember(normalizeChatMember(raw, chatKey, userKey))
+  }
+
+  async function saveMember(member) {
+    await writeJsonAtomic(memberFile(member.chatId, member.id), {
+      version: 1,
+      id: member.id,
+      chatId: member.chatId,
+      name: member.name,
+      facts: member.facts,
+      messageCount: member.messageCount,
+      updatedAt: member.updatedAt
+    })
+  }
+
+  /**
+   * Merge facts into one group member's record (deduped, capped to
+   * `config.memory.maxFacts`, newest kept). The read+write happens inside the
+   * serialized queue so concurrent extractions cannot lose updates.
+   */
+  async function addChatMemberFacts(chatId, userId, facts, { name } = {}) {
+    await ensureReady()
+    const chatKey = String(chatId ?? '')
+    const userKey = String(userId ?? '')
+    if (chatKey === '' || userKey === '') return emptyChatMember(chatKey, userKey)
+    const config = readConfig()
+    const maxFacts = maxFactsOf(config)
+    const now = Date.now()
+    let member = null
+    await enqueue(async () => {
+      const file = memberFile(chatKey, userKey)
+      let raw
+      try {
+        raw = await readJson(file, undefined)
+      } catch (error) {
+        await backupCorrupt(file)
+        logger?.warn?.('群成员记忆文件损坏，已备份并重建', { chatId: chatKey, userId: userKey, error: error?.message })
+        raw = undefined
+      }
+      member = normalizeChatMember(raw, chatKey, userKey)
+      if (typeof name === 'string' && name.trim() !== '') member.name = name.trim().slice(0, 64)
+      const existing = new Set(member.facts.map((fact) => factKey(fact.text)))
+      for (const item of normalizeFactInput(facts)) {
+        const key = factKey(item.text)
+        if (key === '' || existing.has(key)) continue
+        existing.add(key)
+        member.facts.push({ id: genId(), text: item.text, createdAt: now })
+      }
+      if (member.facts.length > maxFacts) member.facts = maxFacts === 0 ? [] : member.facts.slice(-maxFacts)
+      member.updatedAt = now
+      await saveMember(member)
+    })
+    return cloneChatMember(member)
+  }
+
+  /** All member records of one chat, most recently updated first. */
+  async function listChatMembers(chatId) {
+    await ensureReady()
+    const chatKey = String(chatId ?? '')
+    if (chatKey === '') return []
+    let entries
+    try {
+      entries = await fsp.readdir(memberDir(chatKey), { withFileTypes: true })
+    } catch (error) {
+      if (error?.code === 'ENOENT') return []
+      throw error
+    }
+    const members = []
+    for (const dirent of entries) {
+      if (!dirent.isFile() || !dirent.name.endsWith('.json')) continue
+      let userId
+      try {
+        userId = decodeURIComponent(dirent.name.slice(0, -'.json'.length))
+      } catch {
+        userId = dirent.name.slice(0, -'.json'.length)
+      }
+      const file = path.join(memberDir(chatKey), dirent.name)
+      let raw
+      try {
+        raw = await readJson(file, undefined)
+      } catch (error) {
+        await backupCorrupt(file)
+        logger?.warn?.('群成员记忆读取失败，已跳过', { chatId: chatKey, userId, error: error?.message })
+        continue
+      }
+      if (raw === undefined) continue
+      members.push(cloneChatMember(normalizeChatMember(raw, chatKey, userId)))
+    }
+    members.sort((a, b) => b.updatedAt - a.updatedAt)
+    return members
+  }
+
   /** Extra (non-contract) helper used by the memory extractor. */
-  async function setCounters(chatId, patch) {
-    const entry = await cacheEntry(chatId)
+  async function setCounters(chatId, patch) {    const entry = await cacheEntry(chatId)
     if (!isPlainObject(patch)) return { userMessages: entry.counters.userMessages, lastExtractAt: entry.counters.lastExtractAt }
     let changed = false
     for (const key of ['userMessages', 'lastExtractAt', 'messageCount']) {
@@ -641,6 +803,9 @@ export function createMemoryStore({ paths, configStore, logger } = {}) {
     addFacts,
     setFacts,
     setCounters,
+    getChatMember,
+    addChatMemberFacts,
+    listChatMembers,
     listChats,
     clearChat,
     getPerson,

@@ -43,15 +43,17 @@ export const DEFAULT_CONFIG = Object.freeze({
     maxTokens: 800,
     timeoutMs: 120000
   },
-  vision: {
+  multimodal: {
     enabled: false,
     baseUrl: '',
     apiKey: '',
-    model: '',
-    prompt: '请用中文简短描述这张图片的内容（1-2 句，最多 80 字）；如果是表情包/梗图，请说明画面、文字和表达的情绪。',
-    maxTokens: 240,
-    timeoutMs: 45000,
-    maxImageBytes: 8388608
+    prompt: '请用中文简短描述这张图片/这段音视频的内容（1-2 句，最多 80 字）；如果是表情包/梗图，请说明画面、文字和表达的情绪。',
+    timeoutMs: 60000,
+    maxBytes: 16777216,
+    ffmpegPath: 'ffmpeg',
+    image: { enabled: true, model: '' },
+    audio: { enabled: false, model: '', mode: 'transcribe' },
+    video: { enabled: false, model: '', mode: 'frames', frameCount: 4, frameIntervalSec: 1 }
   },
   persona: {
     name: '小Q',
@@ -150,6 +152,10 @@ function boolField(raw, fallback) {
   return typeof raw === 'boolean' ? raw : fallback
 }
 
+function enumField(raw, allowed, fallback) {
+  return typeof raw === 'string' && allowed.includes(raw) ? raw : fallback
+}
+
 function stringArray(raw, fallback, { maxItems = 50, maxLength = 64 } = {}) {
   if (!Array.isArray(raw)) return clone(fallback)
   const out = []
@@ -199,6 +205,12 @@ export function normalizeConfig(raw) {
   const qq = isPlainObject(input.qq) ? input.qq : {}
   const llm = isPlainObject(input.llm) ? input.llm : {}
   const vision = isPlainObject(input.vision) ? input.vision : {}
+  const rawMultimodal = isPlainObject(input.multimodal) ? input.multimodal : {}
+  const rawImage = isPlainObject(rawMultimodal.image) ? rawMultimodal.image : {}
+  const rawAudio = isPlainObject(rawMultimodal.audio) ? rawMultimodal.audio : {}
+  const rawVideo = isPlainObject(rawMultimodal.video) ? rawMultimodal.video : {}
+  const hasLegacyVision = isPlainObject(input.vision)
+  const pick = (key, fallback) => (rawMultimodal[key] !== undefined ? rawMultimodal[key] : hasLegacyVision ? vision[key] : fallback)
   const persona = isPlainObject(input.persona) ? input.persona : {}
   const budget = isPlainObject(input.budget) ? input.budget : {}
   const memory = isPlainObject(input.memory) ? input.memory : {}
@@ -244,15 +256,34 @@ export function normalizeConfig(raw) {
       maxTokens: numberField(llm.maxTokens, defaults.llm.maxTokens, { integer: true, min: 64, max: 32768 }),
       timeoutMs: numberField(llm.timeoutMs, defaults.llm.timeoutMs, { integer: true, min: 5000, max: 600000 })
     },
-    vision: {
-      enabled: boolField(vision.enabled, defaults.vision.enabled),
-      baseUrl: optionalHttpBase(vision.baseUrl),
-      apiKey: stringField(vision.apiKey, defaults.vision.apiKey, { maxLength: 512 }),
-      model: stringField(vision.model, defaults.vision.model, { maxLength: 128 }),
-      prompt: stringField(vision.prompt, defaults.vision.prompt, { allowEmpty: false, maxLength: 2000 }),
-      maxTokens: numberField(vision.maxTokens, defaults.vision.maxTokens, { integer: true, min: 32, max: 4096 }),
-      timeoutMs: numberField(vision.timeoutMs, defaults.vision.timeoutMs, { integer: true, min: 5000, max: 300000 }),
-      maxImageBytes: numberField(vision.maxImageBytes, defaults.vision.maxImageBytes, { integer: true, min: 65536, max: 20971520 })
+    multimodal: {
+      enabled: boolField(pick('enabled'), defaults.multimodal.enabled),
+      baseUrl: optionalHttpBase(pick('baseUrl')),
+      apiKey: stringField(pick('apiKey'), defaults.multimodal.apiKey, { maxLength: 512 }),
+      prompt: stringField(pick('prompt'), defaults.multimodal.prompt, { allowEmpty: false, maxLength: 2000 }),
+      timeoutMs: numberField(pick('timeoutMs'), defaults.multimodal.timeoutMs, { integer: true, min: 5000, max: 300000 }),
+      maxBytes: numberField(
+        rawMultimodal.maxBytes !== undefined ? rawMultimodal.maxBytes : vision.maxImageBytes,
+        defaults.multimodal.maxBytes,
+        { integer: true, min: 65536, max: 20971520 }
+      ),
+      ffmpegPath: stringField(rawMultimodal.ffmpegPath, defaults.multimodal.ffmpegPath, { allowEmpty: false, maxLength: 512 }),
+      image: {
+        enabled: boolField(rawImage.enabled, defaults.multimodal.image.enabled),
+        model: stringField(rawImage.model !== undefined ? rawImage.model : vision.model, defaults.multimodal.image.model, { maxLength: 128 })
+      },
+      audio: {
+        enabled: boolField(rawAudio.enabled, defaults.multimodal.audio.enabled),
+        model: stringField(rawAudio.model, defaults.multimodal.audio.model, { maxLength: 128 }),
+        mode: enumField(rawAudio.mode, ['transcribe', 'chat'], defaults.multimodal.audio.mode)
+      },
+      video: {
+        enabled: boolField(rawVideo.enabled, defaults.multimodal.video.enabled),
+        model: stringField(rawVideo.model, defaults.multimodal.video.model, { maxLength: 128 }),
+        mode: enumField(rawVideo.mode, ['frames', 'url'], defaults.multimodal.video.mode),
+        frameCount: numberField(rawVideo.frameCount, defaults.multimodal.video.frameCount, { integer: true, min: 1, max: 16 }),
+        frameIntervalSec: numberField(rawVideo.frameIntervalSec, defaults.multimodal.video.frameIntervalSec, { min: 0.1, max: 60 })
+      }
     },
     persona: {
       name: stringField(persona.name, defaults.persona.name, { allowEmpty: false, maxLength: 32 }),
@@ -312,8 +343,19 @@ export function normalizeConfig(raw) {
   if (config.qq.appId === '' || config.qq.appSecret === '') {
     warnings.push('qq.appId / qq.appSecret 尚未填写，插件会以「待配置」状态启动，不会连接 QQ')
   }
-  if (config.vision.enabled && (config.vision.baseUrl === '' || config.vision.apiKey === '' || config.vision.model === '')) {
-    warnings.push('vision.enabled 已开启，但 baseUrl / apiKey / model 不完整；图片描述会被跳过')
+  if (config.multimodal.enabled) {
+    if (config.multimodal.baseUrl === '' || config.multimodal.apiKey === '') {
+      warnings.push('multimodal.enabled 已开启，但 baseUrl / apiKey 不完整；多模态识别会被跳过')
+    }
+    if (config.multimodal.image.enabled && config.multimodal.image.model === '') {
+      warnings.push('多模态识别已启用图片，但 image.model 为空')
+    }
+    if (config.multimodal.audio.enabled && config.multimodal.audio.model === '') {
+      warnings.push('多模态识别已启用音频，但 audio.model 为空')
+    }
+    if (config.multimodal.video.enabled && config.multimodal.video.model === '') {
+      warnings.push('多模态识别已启用视频，但 video.model 为空')
+    }
   }
   return { config, warnings }
 }
@@ -362,11 +404,11 @@ export function publicConfig(config) {
       appSecretMasked: maskSecret(config.qq.appSecret),
       hasSecret: config.qq.appSecret !== ''
     },
-    vision: {
-      ...clone(config.vision),
+    multimodal: {
+      ...clone(config.multimodal),
       apiKey: '',
-      apiKeyMasked: maskSecret(config.vision.apiKey),
-      hasApiKey: config.vision.apiKey !== ''
+      apiKeyMasked: maskSecret(config.multimodal.apiKey),
+      hasApiKey: config.multimodal.apiKey !== ''
     }
   }
 }

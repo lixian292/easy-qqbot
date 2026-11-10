@@ -3,36 +3,39 @@
  *
  *   handleInbound(inbound)
  *     1. local commands
- *     2. inbound images -> sticker candidate capture
+ *     2. inbound images -> sticker candidate capture; image/audio/video ->
+ *        media marker (+ optional multimodal description) in the user content
  *     3. budget check
  *     4. append the user message to memory
  *     5. optional context compression
- *     6. prompt assembly
+ *     6. prompt assembly (persona + facts + group speaker's member facts + media)
  *     7. LLM call (+ budget record / fallback message)
  *     8. sticker directive parsing + markdown cleanup + truncation
  *     9. send text then sticker
  *    10. append the assistant message
- *    11. async long-term memory extraction
+ *    11. async long-term memory extraction (chat facts + group speaker facts)
  *
  * Messages of the same chat are serialized through one promise chain and
  * `handleInbound` never rejects: every failure is logged and (when possible)
  * answered with a short Chinese fallback.
  */
 import { buildMessages, buildSystemPrompt } from './prompt.js'
-import { clampText, describeImageMarker, isLikelyImageContentType, parseStickerDirectives, stripMarkdown } from '../util/text.js'
+import { clampText, parseStickerDirectives, stripMarkdown } from '../util/text.js'
+import { classifyAttachment, describeMediaMarker, describeMediaWithText } from '../util/media.js'
 
 const ERROR_FALLBACK = '我这边刚刚走神了，再说一次？'
 const EMPTY_REPLY_FALLBACK = '嗯嗯～'
 const DEFAULT_BLOCK_MESSAGE = '今天的聊天额度已经用完啦，明天再来找我吧～'
-const IMAGE_EXT_RE = /\.(?:jpe?g|png|gif|webp|bmp)(?:[?#].*)?$/i
+const MEDIA_KINDS = new Set(['image', 'audio', 'video'])
 
 const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
 
+function isMediaAttachment(attachment) {
+  return MEDIA_KINDS.has(classifyAttachment(attachment))
+}
+
 function isImageAttachment(attachment) {
-  if (!isPlainObject(attachment)) return false
-  if (isLikelyImageContentType(attachment.contentType)) return true
-  if (typeof attachment.contentType === 'string' && attachment.contentType !== '') return false
-  return IMAGE_EXT_RE.test(String(attachment.filename ?? attachment.url ?? ''))
+  return classifyAttachment(attachment) === 'image'
 }
 
 /**
@@ -50,7 +53,7 @@ function isImageAttachment(attachment) {
  *   qqClient?: object,
  *   logger?: object,
  *   captureIncomingImage?: (attachment: object, inbound: object) => Promise<unknown>,
- *   describeIncomingImage?: (attachment: object, inbound: object) => Promise<string|undefined>
+ *   describeIncomingMedia?: (attachment: object, inbound: object) => Promise<string|undefined>
  * }} deps
  */
 export function createChatEngine({
@@ -67,7 +70,7 @@ export function createChatEngine({
   qqClient,
   logger,
   captureIncomingImage,
-  describeIncomingImage
+  describeIncomingMedia
 } = {}) {
   const queues = new Map()
   const blockNoticedAt = new Map()
@@ -191,7 +194,7 @@ export function createChatEngine({
     }
   }
 
-  /** Image attachments of an inbound message (ignores files/voice/etc.). */
+  /** Image attachments of an inbound message (used for sticker capture only). */
   function inboundImages(inbound) {
     const attachments = Array.isArray(inbound?.attachments) ? inbound.attachments : []
     return attachments.filter((attachment) => isImageAttachment(attachment))
@@ -211,35 +214,41 @@ export function createChatEngine({
   }
 
   /**
-   * Content persisted to memory and shown to the model. QQ only hands the bot a
-   * text placeholder for images (and protocol markup for faces), so make the
-   * image facts explicit. When a vision endpoint is configured, each image is
-   * described first and the description is embedded into the marker; a failed
-   * description simply degrades to the size/media-type marker.
+   * Content persisted to memory and shown to the model.
+   *
+   * QQ hands the bot protocol-ish text and file references rather than media
+   * content, so every inbound image/audio/video attachment gets an explicit
+   * marker. When a multimodal recognizer is injected (`describeIncomingMedia`),
+   * its 1-2 sentence description is appended; a failed/disabled recognizer
+   * simply degrades to the plain marker (`[图片 ...]` / `[语音]` / `[视频 ...]`).
    */
   async function buildInboundContent(inbound) {
     const rawText = String(inbound?.text ?? '').trim()
-    const images = inboundImages(inbound)
-    if (images.length === 0) return rawText
-    let descriptions = images.map(() => '')
-    if (typeof describeIncomingImage === 'function') {
-      descriptions = await Promise.all(
-        images.map(async (attachment) => {
-          try {
-            const text = await describeIncomingImage(attachment, inbound)
-            return typeof text === 'string' ? clampText(text.trim(), 240) : ''
-          } catch (error) {
-            logger?.warn?.('入站图片描述失败', { chatId: inbound?.chatId, error: error?.message })
-            return ''
-          }
-        })
-      )
-    }
-    const markers = images
-      .map((attachment, index) => {
-        const base = describeImageMarker(attachment)
-        return descriptions[index] === '' ? base : `${base}（图片内容：${descriptions[index]}）`
+    const attachments = Array.isArray(inbound?.attachments) ? inbound.attachments : []
+    const media = attachments.filter((attachment) => isMediaAttachment(attachment))
+    if (media.length === 0) return rawText
+
+    const descriptions = await Promise.all(
+      media.map(async (attachment) => {
+        if (typeof describeIncomingMedia !== 'function') return ''
+        try {
+          const text = await describeIncomingMedia(attachment, inbound)
+          return typeof text === 'string' ? clampText(text.trim(), 240) : ''
+        } catch (error) {
+          logger?.warn?.('入站媒体描述失败', {
+            chatId: inbound?.chatId,
+            kind: classifyAttachment(attachment),
+            error: error?.message
+          })
+          return ''
+        }
       })
+    )
+
+    const markers = media
+      .map((attachment, index) =>
+        descriptions[index] === '' ? describeMediaMarker(attachment) : describeMediaWithText(attachment, descriptions[index])
+      )
       .join(' ')
     const withoutPlaceholder = rawText
       .replace(/\[图片\]/g, '')
@@ -381,6 +390,7 @@ export function createChatEngine({
     }
 
     // 6. Gather context and assemble the prompt.
+    const isGroupChat = inbound.kind === 'group'
     let chatInfo = { facts: [], summary: null }
     try {
       if (typeof memoryStore?.getChat === 'function') chatInfo = await memoryStore.getChat(chatId)
@@ -394,6 +404,20 @@ export function createChatEngine({
       logger?.warn?.('读取会话历史失败', { chatId, error: error?.message })
     }
     history = stripJustAppended(history, inbound, content)
+
+    // Group chats keep long-term facts per speaker id: only the current
+    // speaker's own record is injected (single chats read no member file).
+    let speakerFacts = []
+    let speakerName = typeof inbound.userName === 'string' ? inbound.userName : ''
+    if (isGroupChat && typeof inbound.userId === 'string' && inbound.userId !== '' && typeof memoryStore?.getChatMember === 'function') {
+      try {
+        const member = await memoryStore.getChatMember(chatId, inbound.userId)
+        if (Array.isArray(member?.facts)) speakerFacts = member.facts
+        if (typeof member?.name === 'string' && member.name !== '') speakerName = member.name
+      } catch (error) {
+        logger?.warn?.('读取群成员记忆失败', { chatId, userId: inbound.userId, error: error?.message })
+      }
+    }
 
     let stickerCatalog = ''
     if (config.stickers?.enabled !== false && typeof stickerSelector?.catalogText === 'function') {
@@ -410,7 +434,10 @@ export function createChatEngine({
       facts: chatInfo?.facts ?? [],
       summary: chatInfo?.summary ?? null,
       stickerCatalog,
-      now: Date.now()
+      now: Date.now(),
+      speakerFacts,
+      speakerName,
+      isGroupChat
     })
     const messages = buildMessages({ history, userMessage: content, maxMessages: persona.maxHistoryMessages })
 
@@ -479,10 +506,16 @@ export function createChatEngine({
       ...(sticker?.tags?.length ? { stickerTags: sticker.tags } : {})
     })
 
-    // 11. Long-term memory extraction runs in the background.
+    // 11. Long-term memory extraction runs in the background. The speaker is
+    // passed so group chats can store member-specific facts separately.
     if (persona.memoryEnabled !== false && typeof extractor?.maybeExtract === 'function') {
+      const speaker = {
+        userId: inbound.userId,
+        name: inbound.userName,
+        isGroup: isGroupChat
+      }
       Promise.resolve()
-        .then(() => extractor.maybeExtract({ chatId }))
+        .then(() => extractor.maybeExtract({ chatId, speaker }))
         .catch((error) => logger?.warn?.('记忆抽取失败', { chatId, error: error?.message }))
     }
   }

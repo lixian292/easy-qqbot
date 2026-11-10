@@ -20,9 +20,10 @@ qqbot/
 │   ├── util/                # fsx / text / log 等无状态工具
 │   ├── qq/                  # QQ 官方 API 客户端、WebSocket 网关、收发
 │   ├── brain/               # LLM 调用、Prompt 组装、聊天主流程、命令
-│   ├── memory/              # 会话历史、长期记忆、上下文压缩
+│   ├── memory/              # 会话历史、长期记忆（群成员按 ID）、上下文压缩
 │   ├── budget/              # 预算用量记录与限额检查
 │   ├── persona/             # 全局 / 会话 / 用户个性化配置
+│   ├── multimodal/          # 可选：图片/音频/视频识别（OpenAI 兼容 + ffmpeg 抽帧）
 │   ├── stickers/            # 表情包索引、导入、打标、挑选
 │   └── admin/               # 管理后台（HTTP API + 静态页面）
 ├── tools/                   # 命令行工具（批量导入、旧数据迁移、静态检查）
@@ -41,6 +42,7 @@ qqbot/data/
 ├── chats/<chatId>/summary.json   # 上下文压缩摘要
 ├── chats/<chatId>/memory.json    # 该会话的长期事实
 ├── chats/<chatId>/state.json     # 该会话的计数/状态（如上次记忆抽取）
+├── chats/<chatId>/members/<id>.json  # 群聊按发言者 ID 保存的长期事实
 ├── people/<openid>.json     # 用户画像：昵称、事实、最后出现时间
 ├── personas.json            # 会话级个性化覆盖
 ├── stickers/index.json      # 表情包索引（id/hash/tags/desc/layer/使用次数）
@@ -58,12 +60,12 @@ QQ 网关(WebSocket) → gateway.js 解析 op/t
     → app.js 入队（同一 chat 串行，避免上下文竞态）
     → brain/chat.js
         1. 命令识别（帮助/预算/表情/清空上下文…）
-        2. 入站图片 → stickers 候选库（可关闭）
+        2. 入站媒体：图片/语音/视频 → 可选多模态识别（失败降级占位）；图片同时入候选库
         3. budget.check() → 超限则发提示并结束
-        4. 记忆召回 + 压缩判断（memory/compress.js）
-        5. prompt 组装（人设 + 个性化 + 事实 + 近况 + 表情包标签目录）
+        4. 记忆召回 + 压缩判断（memory/compress.js）；群聊额外读取当前发言者成员事实
+        5. prompt 组装（人设 + 个性化 + 会话事实 + 当前发言者事实 + 近况 + 表情包标签目录）
         6. ctx.llm.stream() → 文本 + usage
-        7. budget.record() / memory.append() / 事实抽取（异步）
+        7. budget.record() / memory.append() / 事实抽取（异步，群聊按发言者归因）
         8. 解析 [[sticker: 标签]] → 表情包库挑选 → 发文字 + 发图片
     → qq/outbound.js → api.js（被动回复 msg_id+msg_seq；超时转主动消息）
 ```
@@ -75,8 +77,9 @@ QQ 网关(WebSocket) → gateway.js 解析 op/t
 | config | 默认值、类型校验、原子读写、密钥脱敏 | `host/config.js` |
 | QQ 接入 | access_token 刷新、`/gateway`、WebSocket 鉴权/心跳/重连、收发文本与富媒体 | `host/qq/*` |
 | 预算 | 每次调用记录 token/金额；日/月/会话三级限额；超限冷却 | `host/budget/store.js` |
-| 记忆 | 会话历史 JSONL、长期事实、用户画像、按 token 阈值压缩摘要 | `host/memory/*` |
+| 记忆 | 会话历史 JSONL、长期事实、用户画像、群成员按 ID 事实、按 token 阈值压缩摘要 | `host/memory/*` |
 | 个性化 | 全局人设 + 会话级覆盖（人设/风格/模型/表情频率/记忆开关） | `host/persona/store.js` |
+| 多模态识别 | 可选：图片/音频/视频 → 中文描述；OpenAI 兼容接口，视频支持 ffmpeg 抽帧或 video_url | `host/multimodal/*` |
 | 表情包 | 批量扫描导入、SHA-256 去重、图层（候选/正式/负面/回收）、标签与描述、按标签挑选、管理页打标 | `host/stickers/*` |
 | 管理后台 | 同源 HTTP API + 静态页面：状态、配置、表情包、预算、会话、日志 | `host/admin/*` |
 
@@ -87,5 +90,5 @@ QQ 网关(WebSocket) → gateway.js 解析 op/t
 - **不写 profile 文件**：只由 `plugin_manager install_bundle` 安装；插件自身配置写在 `data/config.json`。
 - **不改会话日志**：本插件不注入 DSH session event，记忆/预算都是插件自有数据。
 - **可降级**：`ctx.llm` / `webServer` 缺失时插件不崩溃，管理页或聊天能力按需禁用并在日志说明。
-- **秘密不入日志、不回传前端**：`appSecret` 在 API 响应中只返回掩码，留空表示不修改。
+- **秘密不入日志、不回传前端**：`appSecret`、多模态 `apiKey` 在 API 响应中只返回掩码，留空表示不修改。
 - **进程内串行**：同一 chat 的回复串行处理；预算/索引写入用 promise 队列串行化。

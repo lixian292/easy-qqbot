@@ -839,17 +839,26 @@
       ]
     },
     {
-      title: '视觉模型（可选）',
-      hint: '使用 OpenAI 兼容的视觉接口把入站图片转成文字描述，再注入对话上下文。baseUrl 示例：https://api.siliconflow.cn/v1 或 https://openrouter.ai/api/v1；启用后需同时填写 Base URL、API Key 与模型名。',
+      title: '多模态识别（可选）',
+      hint: '使用 OpenAI 兼容接口把入站图片、语音、视频转成文字描述，再注入对话上下文。启用总开关并填写 baseUrl、apiKey 与对应模态的模型名后才会调用；各模态可单独开关。',
       fields: [
-        { path: 'vision.enabled', label: '启用图片理解', type: 'bool' },
-        { path: 'vision.baseUrl', label: 'API Base URL', type: 'text', placeholder: 'https://api.siliconflow.cn/v1' },
-        { path: 'vision.apiKey', label: 'API Key', type: 'secret', secretOf: 'vision' },
-        { path: 'vision.model', label: '视觉模型', type: 'text', placeholder: '例如 Qwen/Qwen2.5-VL-7B-Instruct' },
-        { path: 'vision.prompt', label: '描述提示词', type: 'textarea', wide: true, rows: 3 },
-        { path: 'vision.maxTokens', label: '最大输出 tokens', type: 'number', min: 32, max: 4096 },
-        { path: 'vision.timeoutMs', label: '超时 (ms)', type: 'number', min: 5000, max: 300000 },
-        { path: 'vision.maxImageBytes', label: '单张图片最大字节', type: 'number', min: 65536, max: 20971520 }
+        { path: 'multimodal.enabled', label: '启用多模态识别', type: 'bool', hint: '总开关；baseUrl、apiKey 与对应模态 model 完整时才会调用，否则跳过识别' },
+        { path: 'multimodal.baseUrl', label: 'API Base URL', type: 'text', placeholder: 'https://api.siliconflow.cn/v1', hint: 'OpenAI 兼容 base，例如 https://api.siliconflow.cn/v1 或 https://openrouter.ai/api/v1' },
+        { path: 'multimodal.apiKey', label: 'API Key', type: 'secret', secretOf: 'multimodal' },
+        { path: 'multimodal.image.enabled', label: '识别图片', type: 'bool', hint: '入站图片与表情包会先转成文字描述' },
+        { path: 'multimodal.image.model', label: '图片模型', type: 'text', placeholder: '例如 Qwen/Qwen2.5-VL-7B-Instruct' },
+        { path: 'multimodal.audio.enabled', label: '识别语音', type: 'bool', hint: 'QQ 语音消息（voice_wav_url）转文字或直接理解' },
+        { path: 'multimodal.audio.model', label: '语音模型', type: 'text', placeholder: '例如 FunAudioLLM/SenseVoiceSmall' },
+        { path: 'multimodal.audio.mode', label: '语音模式', type: 'text', placeholder: 'transcribe / chat', hint: 'transcribe：调用 /audio/transcriptions 转写；chat：把音频直接发给支持 input_audio 的模型' },
+        { path: 'multimodal.video.enabled', label: '识别视频', type: 'bool', hint: '视频按 mode 选择抽帧识别或直接传 URL' },
+        { path: 'multimodal.video.model', label: '视频模型', type: 'text', placeholder: '例如 Qwen/Qwen2.5-VL-7B-Instruct' },
+        { path: 'multimodal.video.mode', label: '视频模式', type: 'text', placeholder: 'frames / url', hint: 'frames：需要系统已安装 ffmpeg，抽帧后逐帧识别；url：要求服务商支持 video_url 输入' },
+        { path: 'multimodal.video.frameCount', label: '抽帧数量', type: 'number', min: 1, max: 16, hint: 'frames 模式最多抽取的帧数' },
+        { path: 'multimodal.video.frameIntervalSec', label: '抽帧间隔（秒）', type: 'number', min: 0.1, max: 30, step: 0.1, hint: 'frames 模式每隔多少秒取一帧' },
+        { path: 'multimodal.prompt', label: '识别提示词', type: 'textarea', wide: true, rows: 3 },
+        { path: 'multimodal.timeoutMs', label: '超时 (ms)', type: 'number', min: 1000, max: 600000 },
+        { path: 'multimodal.maxBytes', label: '单文件最大字节', type: 'number', min: 65536, max: 104857600, hint: '超过该大小的媒体会跳过识别（默认 16777216，即 16 MiB）' },
+        { path: 'multimodal.ffmpegPath', label: 'ffmpeg 路径', type: 'text', placeholder: 'ffmpeg', hint: '视频 frames 模式需要系统安装 ffmpeg；可填可执行文件绝对路径，找不到时视频识别会失败' }
       ]
     },
     {
@@ -1866,6 +1875,52 @@
     }).join('') + '</ul>';
   }
 
+  // ---------------------------------------------------------------------------
+  // 群成员长期事实（按 ID）：chats.get 可能返回 members 数组
+  // [{ id, name, facts: [{ id, text, createdAt }], messageCount, updatedAt }]
+  // ---------------------------------------------------------------------------
+  function memberFactTexts(member) {
+    var facts = member && Array.isArray(member.facts) ? member.facts : [];
+    return facts.map(function (fact) {
+      return typeof fact === 'string' ? fact : (fact && (fact.text || fact.fact)) || '';
+    }).filter(Boolean);
+  }
+
+  function renderMemberFacts(member) {
+    var facts = memberFactTexts(member);
+    if (!facts.length) return '<p class="muted small member-empty">暂无长期事实</p>';
+    return '<ul class="fact-list member-facts">' + facts.map(function (fact) {
+      return '<li>' + esc(fact) + '</li>';
+    }).join('') + '</ul>';
+  }
+
+  function renderChatMembers(members) {
+    var list = (Array.isArray(members) ? members : []).filter(function (member) {
+      return member !== null && typeof member === 'object';
+    });
+    var intro = '<p class="muted small member-intro">群聊中每个发言者的长期事实按用户 ID 分开记录，该成员下次发言时会注入其个人记忆。</p>';
+    if (!list.length) {
+      return intro + emptyHtml('暂无群成员长期事实');
+    }
+    var items = list.map(function (member) {
+      var id = String(member.id || member.userId || '');
+      var name = String(member.name || '').trim();
+      var messageCount = Number.isFinite(Number(member.messageCount)) ? Number(member.messageCount) : 0;
+      var factCount = memberFactTexts(member).length;
+      return (
+        '<div class="member-item">' +
+        '<div class="member-head">' +
+        '<span class="member-name">' + esc(name || '未命名成员') + '</span>' +
+        (id ? '<code class="mono member-id">' + esc(id) + '</code>' : '<span class="muted small member-id">未知 ID</span>') +
+        '<span class="muted small member-meta">事实 ' + factCount + ' · 消息 ' + fmtNum(messageCount) + ' · 更新 ' + fmtAgo(member.updatedAt) + '</span>' +
+        '</div>' +
+        renderMemberFacts(member) +
+        '</div>'
+      );
+    }).join('');
+    return intro + '<div class="member-list">' + items + '</div>';
+  }
+
   function renderSummary(summary) {
     if (!summary) return emptyHtml('暂无摘要');
     var text = typeof summary === 'string' ? summary : summary.text || '';
@@ -1887,9 +1942,18 @@
     var persona = result.persona || null;
     var history = Array.isArray(chat.history) ? chat.history : [];
     var facts = Array.isArray(chat.facts) ? chat.facts : [];
+    var members = Array.isArray(result.members) ? result.members : (Array.isArray(chat.members) ? chat.members : []);
     var counters = chat.counters || {};
     var chatId = String(chat.id || state.chats.current || '');
+    var isGroupChat = chat.kind === 'group' || chatId.indexOf('group_') === 0;
     var personaFields = persona || {};
+    var membersBlock = '';
+    if (isGroupChat || members.length) {
+      membersBlock =
+        '<details class="detail-block" open><summary>群成员长期事实（按 ID）' +
+        (members.length ? '（' + fmtNum(members.length) + '）' : '') +
+        '</summary>' + renderChatMembers(members) + '</details>';
+    }
     var inputValue = function (value) {
       return esc(value === null || value === undefined ? '' : value);
     };
@@ -1921,6 +1985,7 @@
       '</details>' +
       '<details class="detail-block"><summary>上下文摘要</summary>' + renderSummary(chat.summary) + '</details>' +
       '<details class="detail-block"><summary>长期事实</summary>' + renderFacts(facts) + '</details>' +
+      membersBlock +
       '<details class="detail-block" open><summary>历史消息（' + fmtNum(history.length) + '）</summary>' + renderHistory(history) + '</details>';
   }
 

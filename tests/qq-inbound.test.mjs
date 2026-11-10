@@ -126,3 +126,124 @@ test('createEventDedupe：首次 false、重复 true、LRU 淘汰、空 key 忽�
   assert.equal(defaults.seen('x'), false)
   assert.equal(defaults.seen('x'), true)
 })
+
+test('语音附件归一化：voice_wav_url / asr_refer_text 与既有字段并存', () => {
+  const message = normalizeDispatch('C2C_MESSAGE_CREATE', {
+    id: 'msg-voice-1',
+    content: '[语音]',
+    timestamp: '2026-11-10T09:00:00+08:00',
+    author: { user_openid: 'user-voice' },
+    attachments: [
+      {
+        content_type: 'voice',
+        url: 'https://cdn.example/voice.silk',
+        filename: 'voice.silk',
+        size: 2048,
+        voice_wav_url: 'https://cdn.example/voice.wav',
+        asr_refer_text: '  今天天气不错  '
+      }
+    ]
+  })
+
+  assert.equal(message.text, '[语音]')
+  assert.equal(message.attachments.length, 1)
+  assert.deepEqual(message.attachments[0], {
+    url: 'https://cdn.example/voice.silk',
+    contentType: 'voice',
+    filename: 'voice.silk',
+    size: 2048,
+    voiceWavUrl: 'https://cdn.example/voice.wav',
+    asrReferText: '今天天气不错'
+  })
+})
+
+test('语音附件仅有 voice_wav_url 时保留（url 缺失不抛错）', () => {
+  const message = normalizeDispatch('GROUP_AT_MESSAGE_CREATE', {
+    id: 'msg-voice-2',
+    group_openid: 'group-1',
+    content: '',
+    timestamp: '2026-11-10T09:01:00+08:00',
+    author: { member_openid: 'member-1', member_role: 'member' },
+    attachments: [{ content_type: 'voice', voice_wav_url: 'https://cdn.example/only.wav' }]
+  })
+
+  assert.deepEqual(message.attachments, [
+    { url: '', contentType: 'voice', voiceWavUrl: 'https://cdn.example/only.wav' }
+  ])
+  assert.equal('asrReferText' in message.attachments[0], false, '无 ASR 文本时不写字段')
+})
+
+test('视频附件归一化：video/mp4 保留尺寸/大小等字段', () => {
+  const message = normalizeDispatch('GROUP_AT_MESSAGE_CREATE', {
+    id: 'msg-video-1',
+    group_openid: 'group-1',
+    content: '看视频',
+    timestamp: '2026-11-10T09:02:00+08:00',
+    author: { member_openid: 'member-2', member_role: 'admin' },
+    attachments: [
+      { content_type: 'video/mp4', url: 'https://cdn.example/clip.mp4', filename: 'clip.mp4', width: 1280, height: 720, size: 1048576 },
+      { content_type: 'file', url: 'https://cdn.example/doc.zip', filename: 'doc.zip', size: 512 }
+    ]
+  })
+
+  assert.equal(message.text, '看视频')
+  assert.deepEqual(message.attachments, [
+    {
+      url: 'https://cdn.example/clip.mp4',
+      contentType: 'video/mp4',
+      filename: 'clip.mp4',
+      width: 1280,
+      height: 720,
+      size: 1048576
+    },
+    { url: 'https://cdn.example/doc.zip', contentType: 'file', filename: 'doc.zip', size: 512 }
+  ])
+  assert.equal('voiceWavUrl' in message.attachments[0], false)
+  assert.equal('asrReferText' in message.attachments[0], false)
+})
+
+test('附件缺字段/类型异常不抛错', () => {
+  const message = normalizeDispatch('C2C_MESSAGE_CREATE', {
+    id: 'msg-attr-1',
+    content: '',
+    timestamp: '2026-11-10T09:03:00+08:00',
+    author: { user_openid: 'user-attr' },
+    attachments: [
+      { content_type: 'voice' },
+      { url: 'https://cdn.example/a.png' },
+      {
+        url: 'https://cdn.example/b.mp4',
+        width: 'not-a-number',
+        height: -5,
+        size: 0,
+        filename: 42,
+        voice_wav_url: 5,
+        asr_refer_text: {}
+      },
+      'oops',
+      null,
+      { url: 'https://cdn.example/voice3.silk', content_type: 'voice', voice_wav_url: '', asr_refer_text: '' }
+    ]
+  })
+
+  assert.deepEqual(message.attachments, [
+    { url: 'https://cdn.example/a.png' },
+    { url: 'https://cdn.example/b.mp4' },
+    { url: 'https://cdn.example/voice3.silk', contentType: 'voice' }
+  ])
+
+  const noAttachments = normalizeDispatch('C2C_MESSAGE_CREATE', {
+    id: 'msg-attr-2',
+    content: 'hi',
+    author: { user_openid: 'user-attr' }
+  })
+  assert.deepEqual(noAttachments.attachments, [])
+
+  const badAttachments = normalizeDispatch('C2C_MESSAGE_CREATE', {
+    id: 'msg-attr-3',
+    content: 'hi',
+    author: { user_openid: 'user-attr' },
+    attachments: 'not-an-array'
+  })
+  assert.deepEqual(badAttachments.attachments, [])
+})
