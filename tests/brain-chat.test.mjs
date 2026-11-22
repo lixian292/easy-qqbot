@@ -635,6 +635,59 @@ test('群聊没有成员事实时 prompt 不含成员记忆段', async () => {
   }
 })
 
+test('生图请求回合不发送自动表情包', async () => {
+  const sticker = { id: 's1', tags: ['开心'] }
+  const calls = []
+  const { engine, qqClient, cleanup } = await setup({
+    stickerSelector: {
+      async catalogText() { return '' },
+      async maybeStickerFromText() { calls.push('auto'); return sticker },
+      async pickForReply(tags) { calls.push(['directive', tags]); return sticker }
+    },
+    llm: makeFakeLlm({ reply: '好呀，给你拍一张，稍等哦' })
+  })
+  try {
+    await engine.handleInbound(makeInbound({ text: '小蓝，自拍一张给他们瞅瞅' }))
+    assert.equal(calls.length, 0)
+    assert.equal(qqClient.sent.some((item) => item.type === 'sticker'), false)
+    assert.ok(qqClient.sent.some((item) => item.type === 'text'))
+  } finally {
+    await cleanup()
+  }
+})
+
+test('生图回合即使模型给出 sticker 指令也不发送表情包', async () => {
+  const sticker = { id: 's1', tags: ['开心'] }
+  const picks = []
+  const { engine, qqClient, outputClient, cleanup } = await setup({
+    config: {
+      commands: { adminOpenids: ['u1'] },
+      stickers: { enabled: true },
+      output: {
+        enabled: true,
+        allowModelDirectives: true,
+        image: { enabled: true, baseUrl: 'https://api.example.com/v1', apiKey: 'k', model: 'm' }
+      }
+    },
+    llm: makeFakeLlm({ reply: '好呀 [[image: 小蓝在海边]] [[sticker: 开心]]' }),
+    stickerSelector: {
+      async catalogText() { return '' },
+      async maybeStickerFromText() { picks.push('auto'); return sticker },
+      async pickForReply(tags) { picks.push(['directive', tags]); return sticker }
+    },
+    outputClient: makeOutputClient()
+  })
+  try {
+    await engine.handleInbound(makeInbound({ text: '小蓝，自拍一张给他们瞅瞅' }))
+    await waitFor(() => qqClient.sent.find((item) => item.type === 'media'))
+    assert.equal(picks.length, 0)
+    assert.equal(qqClient.sent.some((item) => item.type === 'sticker'), false)
+    assert.equal(outputClient.calls.length, 1)
+  } finally {
+    await cleanup()
+  }
+})
+
 test('命令 followUp 生成结果通过 sendMedia 发送到 QQ', async () => {
   const { engine, qqClient, cleanup } = await setup({
     commandHandler: {

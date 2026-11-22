@@ -26,6 +26,7 @@ import { parseOutputDirectives } from '../output/directives.js'
 import { shortMessage } from '../output/errors.js'
 import { qqFileType } from '../output/media.js'
 import { canUseOutput } from './access.js'
+import { looksLikeGenerationRequest } from './intent.js'
 
 const ERROR_FALLBACK = '我这边刚刚走神了，再说一次？'
 const EMPTY_REPLY_FALLBACK = '嗯嗯～'
@@ -558,8 +559,16 @@ export function createChatEngine({
     const finalText = clampText(cleaned, persona.replyMaxChars)
 
     // 9. Send text first, then the sticker (best effort, degrade to text only).
+    // Media-generation turns already produce an image/voice/video; a random
+    // sticker on top of it usually looks unrelated, so suppress stickers for
+    // the whole turn (including model-emitted sticker directives).
+    const generationRequested = looksLikeGenerationRequest(inbound.text) || outputDirectives.requests.length > 0
     let sticker = null
-    if (Array.isArray(directives.requests) && directives.requests.length > 0) {
+    if (generationRequested) {
+      if (Array.isArray(directives.requests) && directives.requests.length > 0) {
+        logger?.debug?.('生图/生成媒体回合已忽略表情包指令', { chatId, text: inbound.text })
+      }
+    } else if (Array.isArray(directives.requests) && directives.requests.length > 0) {
       sticker = await pickStickerForDirectives(directives.requests)
     } else {
       sticker = await maybeStickerFromText(finalText, persona)

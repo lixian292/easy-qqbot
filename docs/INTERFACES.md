@@ -269,7 +269,7 @@ export function createChatEngine({
 6. 组装：`history = memoryStore.history(chatId, persona.maxHistoryMessages)`；facts = chat.facts；群聊额外 `memoryStore.getChatMember(chatId, inbound.userId)` 取当前发言者 facts/name；summary；stickerCatalog；`buildSystemPrompt({..., speakerFacts, speakerName, isGroupChat})`。
 7. `llmClient.complete()`；成功 → `budgetStore.record()`；失败 → 记 warn，发一次兜底错误文案，返回。
 8. 解析 `parseStickerDirectives(text)`，再解析 `parseOutputDirectives(text)`（始终剥离标记）；清理 Markdown → `stripMarkdown`；截断到 `persona.replyMaxChars`。
-9. 发送：先文字（如果有），再表情包：显式指令优先 `stickerSelector.pickForReply(tags)`；否则按 `stickerChance` 在回复文本命中标签时 `stickerSelector.maybeStickerFromText()`；发送失败降级为纯文字。`output.enabled && output.allowModelDirectives` 时，后台执行第一条 `[[image/voice/video: ...]]` 指令生成并发送，失败只回文字提示。
+9. 发送：先文字（如果有），再表情包：显式指令优先 `stickerSelector.pickForReply(tags)`；否则按 `stickerChance` 在回复文本命中标签时 `stickerSelector.maybeStickerFromText()`；发送失败降级为纯文字。**当用户本轮是生图/生成媒体请求（`looksLikeGenerationRequest`）或模型给出 `[[image/voice/video]]` 指令时，整轮表情包（含模型给的 `[[sticker]]`）都会被抑制**，避免生成结果旁出现无关表情。`output.enabled && output.allowModelDirectives` 时，后台执行第一条 `[[image/voice/video: ...]]` 指令生成并发送，失败只回文字提示。
 10. `memoryStore.appendMessage(chatId, {role:'assistant', content: finalText, ts})`。
     - 模型输出指令与命令一致受 `canUseOutput(inbound, config)` 约束：`output.commandAccess='admin'` 时普通用户触发的 `[[image/voice/video]]` 会被剥离但不执行。
 11. 异步（不 await，catch 后仅记日志）：`extractor.maybeExtract({ chatId, speaker: { userId, name, isGroup } })`。
@@ -326,7 +326,7 @@ export function createStickerSelector({ stickerStore, configStore, logger })
 |---|---|
 | `async pickForReply(tags)` | 解析指令标签 → `stickerStore.pick({tags})`；无匹配再放宽为任意单个标签重试 |
 | `async catalogText()` | 生成提示词用目录字符串：`标签(count)、…`（仅 library，最多 `config.stickers.maxCatalogTags` 个；空库返回 `''`） |
-| `async maybeStickerFromText(text, rng=Math.random)` | 若 `stickerChance` 命中且回复文本包含某个 library 标签 → 随机挑一个；否则 `null` |
+| `async maybeStickerFromText(text, rng=Math.random)` | 若 `stickerChance` 命中且回复文本包含某个 library 标签 → 随机挑一个；自动匹配会忽略单字 / 纯数字 / 纯标点标签（`6`、`刀`、`?`），显式 `[[sticker: ...]]` 不受此限制；否则 `null` |
 
 ## 13. host/qq/api.js
 

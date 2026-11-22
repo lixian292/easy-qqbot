@@ -80,6 +80,7 @@ const required = [
   'host/brain/chat.js',
   'host/brain/commands.js',
   'host/brain/access.js',
+  'host/brain/intent.js',
   'host/multimodal/download.js',
   'host/multimodal/frames.js',
   'host/multimodal/client.js',

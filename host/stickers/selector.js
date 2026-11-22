@@ -20,6 +20,22 @@ function containsTag(text, tag) {
 }
 
 /**
+ * Automatic tag matching is intentionally stricter than explicit
+ * `[[sticker: ...]]` directives: one-character, numeric or punctuation-only
+ * tags ("6", "刀", "?", "1") match far too much normal chatter and produce the
+ * weird stickers users complain about. Explicit directives may still use them.
+ */
+export function isAutoStickerTag(tag) {
+  const value = String(tag ?? '').trim()
+  if (value === '') return false
+  const chars = Array.from(value)
+  if (chars.length < 2) return false
+  if (/^[\d\s\p{P}\p{S}]+$/u.test(value)) return false
+  if (/^[a-z]{1,2}$/i.test(value)) return false
+  return true
+}
+
+/**
  * @param {{ stickerStore: object, configStore: { get(): object }, logger?: object }} deps
  */
 export function createStickerSelector({ stickerStore, configStore, logger } = {}) {
@@ -111,7 +127,7 @@ export function createStickerSelector({ stickerStore, configStore, logger } = {}
     const matched = []
     for (const item of Array.isArray(listing?.items) ? listing.items : []) {
       const tags = Array.isArray(item.tags) ? item.tags : []
-      if (tags.some((tag) => containsTag(content, tag))) matched.push(item)
+      if (tags.some((tag) => isAutoStickerTag(tag) && containsTag(content, tag))) matched.push(item)
     }
     if (matched.length === 0) return null
     const pickRoll = Number(random())

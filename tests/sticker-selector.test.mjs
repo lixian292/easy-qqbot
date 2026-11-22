@@ -112,6 +112,19 @@ test('maybeStickerFromText 概率命中且回复文本包含 library 标签时�
   })
 })
 
+test('自动挑选忽略单字/纯数字标签，显式指令仍可使用', async () => {
+  await withSelector(async ({ store, selector }) => {
+    const numeric = await addLibrary(store, 'numeric', ['6'])
+    const short = await addLibrary(store, 'short', ['刀'])
+    const meaningful = await addLibrary(store, 'meaningful', ['无语'])
+    const hit = await selector.maybeStickerFromText('6 刀 无语', () => 0)
+    assert.equal(hit.id, meaningful.id)
+    assert.equal(await selector.maybeStickerFromText('6 刀', () => 0), null)
+    assert.equal((await selector.pickForReply(['6'])).id, numeric.id)
+    assert.equal((await selector.pickForReply(['刀'])).id, short.id)
+  })
+})
+
 test('maybeStickerFromText 概率为 0 时不发；空库返回 null', async () => {
   await withSelector(
     async ({ store, selector }) => {

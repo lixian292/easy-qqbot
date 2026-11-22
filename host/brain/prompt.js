@@ -42,7 +42,8 @@ export function buildStickerInstruction({ stickerCatalog, stickerChance } = {}) 
   const lines = [
     `可用表情包标签：${catalog}`,
     '当回复适合配一张表情包时，在回复最末尾单独加一行：[[sticker: 标签1, 标签2]]。',
-    '标签必须来自上面的列表（最多两个）；不确定或氛围不合适就不要加。'
+    '标签必须来自上面的列表（最多两个）；不确定或氛围不合适就不要加。',
+    '如果用户本轮明确要求生成图片、语音或视频，不要再附加表情包指令。'
   ]
   if (Number.isFinite(chance) && chance > 0 && chance < 1) {
     lines.push(`表情包只是偶尔点缀，大约 ${Math.max(1, Math.round(chance * 100))}% 的回复里出现就够了，不要每句都配。`)
