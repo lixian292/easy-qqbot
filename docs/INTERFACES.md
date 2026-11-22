@@ -173,10 +173,10 @@ export function createMemoryExtractor({ configStore, llmClient, memoryStore, log
 
 | 方法 | 说明 |
 |---|---|
-| `async maybeExtract({ chatId, force=false, speaker })` | `speaker={userId,name,isGroup}`；抽取 `{chatFacts, memberFacts}`（兼容旧字符串数组）；群聊把 memberFacts 写入当前成员文件并 upsertPerson；返回 `{ extracted, facts, memberFacts, reason? }` |
-| `async extractNow(chatId)` | 强制抽取 |
+| `async maybeExtract({ chatId, force=false, speaker })` | `speaker={userId,name,isGroup}`；抽取 `{chatFacts, memberFacts}`（兼容旧字符串数组）；群聊强制 `chatFacts=[]`，只把 memberFacts 写入当前成员文件并 upsertPerson；返回 `{ extracted, facts, memberFacts, reason? }` |
+| `async extractNow(chatId)` | 强制抽取；群聊未传 speaker 时从最近一条带 userId 的用户消息解析发言者 |
 
-抽取逻辑：取该会话最近 20 条消息（含摘要），用 `llmClient.complete()` 让模型输出 `{ "chatFacts": [...], "memberFacts": [...] }`（兼容纯字符串数组；最多 3 条、每条不超过 60 字、只记长期有价值的事实），容错解析；失败只记 warn 日志，不抛错。成功后 chatFacts → `memoryStore.addFacts()`；群聊 memberFacts → `addChatMemberFacts()` + `upsertPerson()`；单聊并入 chatFacts。
+抽取逻辑：取该会话最近 20 条消息（含摘要），用 `llmClient.complete()` 让模型输出 `{ "chatFacts": [...], "memberFacts": [...] }`（兼容纯字符串数组；最多 3 条、每条不超过 60 字、只记长期有价值的事实），容错解析；失败只记 warn 日志，不抛错。**群聊使用单独的系统提示，chatFacts 必须为空，即使模型返回群级事实也会被丢弃**；memberFacts → `addChatMemberFacts()` + `upsertPerson()`。单聊把 memberFacts 并入 chatFacts，写 `memoryStore.addFacts()`。
 
 ## 5. host/memory/compress.js
 
@@ -190,6 +190,8 @@ export function createCompressor({ configStore, memoryStore, llmClient, logger }
 | `async compressNow(chatId)` | 无条件压缩（无更早消息时返回 `{compressed:false, removed:0}`） |
 
 摘要用 `llmClient.complete()` 生成，长度 ≤ `config.memory.summaryMaxChars`；更新 `memoryStore.setSummary()` 与 `replaceHistory()`。压缩失败时回滚（不改历史、不抛错，返回 `{compressed:false, error}`，记 warn）。
+
+群聊（`chatId` 以 `group_` 开头）使用专用摘要提示：只概括讨论主题、兴趣方向、氛围、互动习惯与圈子类别；明确禁止记录具体事件、具体玩笑/接龙/单次请求及个人隐私；人物统一用「群友」代指，机器人称「机器人」。生成后还会用成员名单/openid 做一次匿名化兜底，把泄漏的昵称或 ID 替换为「群友」。
 
 ## 6. host/brain/llm.js
 

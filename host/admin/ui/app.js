@@ -3244,14 +3244,15 @@
     }
     listEl.innerHTML = chats.map(function (chat) {
       var active = chat.chatId === state.chats.current;
-      var kind = chat.kind === 'group' ? '群聊' : '单聊';
+      var isGroup = chat.kind === 'group' || String(chat.chatId || '').indexOf('group_') === 0;
+      var kind = isGroup ? '群聊' : '单聊';
       return (
         '<button type="button" class="list-item' + (active ? ' is-active' : '') + '" data-chat-id="' + esc(chat.chatId) + '">' +
         '<span class="list-item-title">' + esc(chat.title || chat.chatId) + '</span>' +
         '<span class="list-item-sub"><span class="kind-badge">' + kind + '</span>' +
         '<span class="muted">' + fmtNum(chat.messageCount) + ' 条</span>' +
         '<span class="muted">' + fmtAgo(chat.lastAt) + '</span>' +
-        (Number(chat.factsCount) > 0 ? '<span class="muted">事实 ' + fmtNum(chat.factsCount) + '</span>' : '') +
+        (!isGroup && Number(chat.factsCount) > 0 ? '<span class="muted">事实 ' + fmtNum(chat.factsCount) + '</span>' : '') +
         '</span>' +
         '<span class="list-item-id mono">' + esc(chat.chatId) + '</span>' +
         '</button>'
@@ -3318,7 +3319,7 @@
     var list = (Array.isArray(members) ? members : []).filter(function (member) {
       return member !== null && typeof member === 'object';
     });
-    var intro = '<p class="muted small member-intro">群聊中每个发言者的长期事实按用户 ID 分开记录，该成员下次发言时会注入其个人记忆。</p>';
+    var intro = '<p class="muted small member-intro">群聊不保留会话级长期事实；每个发言者的长期事实按用户 ID 分开记录，该成员下次发言时只注入其个人记忆。</p>';
     if (!list.length) {
       return intro + emptyHtml('暂无群成员长期事实');
     }
@@ -3367,11 +3368,14 @@
     var chatId = String(chat.id || state.chats.current || '');
     var isGroupChat = chat.kind === 'group' || chatId.indexOf('group_') === 0;
     var personaFields = persona || {};
+    var memberFactCount = members.reduce(function (sum, member) {
+      return sum + memberFactTexts(member).length;
+    }, 0);
     var membersBlock = '';
     if (isGroupChat || members.length) {
       membersBlock =
         '<details class="detail-block" open><summary>群成员长期事实（按 ID）' +
-        (members.length ? '（' + fmtNum(members.length) + '）' : '') +
+        (members.length ? '（' + fmtNum(members.length) + ' 人 · ' + fmtNum(memberFactCount) + ' 条）' : '') +
         '</summary>' + renderChatMembers(members) + '</details>';
     }
     var inputValue = function (value) {
@@ -3383,7 +3387,7 @@
       '<div class="muted mono small">' + esc(chatId) + '</div>' +
       '<div class="detail-meta muted small">消息 ' + fmtNum(history.length) +
       ' · 用户消息 ' + fmtNum(counters.userMessages) +
-      ' · 长期事实 ' + fmtNum(facts.length) +
+      (isGroupChat ? ' · 成员事实 ' + fmtNum(memberFactCount) : ' · 长期事实 ' + fmtNum(facts.length)) +
       '</div></div>' +
       '<div class="detail-actions">' +
       '<button type="button" class="btn btn-sm" data-act="compress">压缩上下文</button>' +
@@ -3403,8 +3407,10 @@
       '<div class="row-actions"><button type="button" class="btn btn-primary btn-sm" data-act="persona-save">保存覆盖</button>' +
       '<button type="button" class="btn btn-sm" data-act="persona-delete">删除覆盖</button></div>' +
       '</details>' +
-      '<details class="detail-block"><summary>上下文摘要</summary>' + renderSummary(chat.summary) + '</details>' +
-      '<details class="detail-block"><summary>长期事实</summary>' + renderFacts(facts) + '</details>' +
+      '<details class="detail-block"' + (isGroupChat ? ' open' : '') + '><summary>上下文摘要</summary>' +
+      (isGroupChat ? '<p class="muted small">群聊摘要只记录讨论主题、氛围、互动习惯和圈子类别；人物统一用「群友」代指，不记录具体事件。已有摘要会在下次压缩时按新规则重写。</p>' : '') +
+      renderSummary(chat.summary) + '</details>' +
+      (isGroupChat ? '' : '<details class="detail-block"><summary>长期事实</summary>' + renderFacts(facts) + '</details>') +
       membersBlock +
       '<details class="detail-block" open><summary>历史消息（' + fmtNum(history.length) + '）</summary>' + renderHistory(history) + '</details>';
   }
@@ -3480,7 +3486,10 @@
     if (action === 'extract') {
       var extracted = await api('chats.extract', { chatId: chatId });
       var facts = extracted && Array.isArray(extracted.facts) ? extracted.facts : [];
-      toast(facts.length ? '抽取到 ' + facts.length + ' 条长期事实' : '没有抽取到新的长期事实', facts.length ? 'success' : 'info');
+      var memberFacts = extracted && Array.isArray(extracted.memberFacts) ? extracted.memberFacts : [];
+      var totalFacts = facts.length + memberFacts.length;
+      var factLabel = memberFacts.length > 0 ? '成员长期事实' : '长期事实';
+      toast(totalFacts ? '抽取到 ' + totalFacts + ' 条' + factLabel : '没有抽取到新的长期事实', totalFacts ? 'success' : 'info');
       await loadChats();
       await selectChat(chatId);
       return;

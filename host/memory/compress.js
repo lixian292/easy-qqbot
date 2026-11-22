@@ -30,7 +30,11 @@ function formatMessageForSummary(message) {
   return `${role}：${clipped}`
 }
 
-function buildCompressInput(previousSummary, oldMessages, summaryMaxChars) {
+function isGroupChatId(chatId) {
+  return String(chatId ?? '').startsWith('group_')
+}
+
+function buildCompressInput(previousSummary, oldMessages, summaryMaxChars, { isGroup = false } = {}) {
   const parts = []
   const summaryText = isPlainObject(previousSummary) ? String(previousSummary.text ?? '').trim() : ''
   if (summaryText !== '') parts.push(`【已有摘要】\n${summaryText}`)
@@ -39,8 +43,46 @@ function buildCompressInput(previousSummary, oldMessages, summaryMaxChars) {
     .filter((line) => line !== null)
     .join('\n')
   parts.push(`【需要合并进摘要的较早对话】\n${transcript}`)
+  if (isGroup) {
+    parts.push('请只概括群聊的讨论主题、氛围、互动习惯和圈子类别；不要写具体某件事或某个人；人物一律用「群友」代指，机器人称「机器人」。')
+  }
   parts.push(`请输出一段不超过 ${summaryMaxChars} 个字符的中文摘要。`)
   return parts.join('\n\n')
+}
+
+function groupSummarySystemPrompt(summaryMaxChars) {
+  return (
+    '你是 QQ 群聊的上下文摘要助手。请把「已有摘要」和「较早的对话」合并成一段“群聊氛围与主题摘要”。' +
+    '只记录：群聊长期关注的讨论主题 / 兴趣方向、整体氛围（如活跃、轻松、吐槽、互助）、互动习惯、圈子类别（如游戏、二次元、技术、生活）。' +
+    '不要记录具体某件事、某次玩笑、接龙/游戏的具体内容、单次请求或个人隐私；不要逐条复述对话。' +
+    '所有人物一律用「群友」或「群友们」代指，机器人称「机器人」；禁止出现昵称、姓名、QQ 号、openid、用户 ID。' +
+    `只输出摘要正文，不要解释，不要使用 Markdown 或列表，长度不超过 ${summaryMaxChars} 个字符。`
+  )
+}
+
+function groupMemberLabels(members) {
+  const labels = []
+  for (const member of Array.isArray(members) ? members : []) {
+    if (!isPlainObject(member)) continue
+    const name = String(member.name ?? '').trim()
+    const id = String(member.id ?? member.userId ?? '').trim()
+    if (name.length >= 2) labels.push(name)
+    if (id.length >= 8) labels.push(id)
+  }
+  return [...new Set(labels)].sort((left, right) => right.length - left.length)
+}
+
+/** Enforce the group-summary anonymity rule even if the model leaks a name. */
+function anonymizeGroupSummary(text, members, personaName = '') {
+  let value = String(text ?? '')
+  for (const label of groupMemberLabels(members)) {
+    value = value.split(label).join('群友')
+  }
+  const botName = String(personaName ?? '').trim()
+  if (botName.length >= 2) value = value.split(botName).join('机器人')
+  value = value.replace(/\b[0-9A-F]{24,}\b/gi, '群友')
+  value = value.replace(/@[^\s，。；、:：]{1,32}/g, '群友')
+  return value
 }
 
 /**
@@ -77,6 +119,15 @@ export function createCompressor({ configStore, memoryStore, llmClient, logger }
 
     const chat = await memoryStore.getChat(chatId)
     const previousSummary = chat?.summary ?? null
+    const isGroup = isGroupChatId(chatId) || chat?.kind === 'group'
+    let members = []
+    if (isGroup && typeof memoryStore.listChatMembers === 'function') {
+      try {
+        members = await memoryStore.listChatMembers(chatId)
+      } catch (error) {
+        logger?.warn?.('读取群成员列表失败，摘要仍将按群友代指生成', { chatId, error: error?.message })
+      }
+    }
 
     if (!force) {
       const estimated = estimateTokens(previousSummary?.text ?? '') + estimateMessagesTokens(history)
@@ -90,15 +141,18 @@ export function createCompressor({ configStore, memoryStore, llmClient, logger }
     let summaryText
     try {
       const result = await llmClient.complete({
-        system:
-          '你是对话摘要助手。请把「已有摘要」和「较早的对话」合并成一段简洁的中文摘要，保留人物、关系、偏好、约定和未完成的话题，去掉寒暄与重复内容。' +
-          `只输出摘要正文，不要解释，不要使用 Markdown 或列表，长度不超过 ${summaryMaxChars} 个字符。`,
-        messages: [{ role: 'user', content: buildCompressInput(previousSummary, oldMessages, summaryMaxChars) }],
+        system: isGroup
+          ? groupSummarySystemPrompt(summaryMaxChars)
+          : '你是对话摘要助手。请把「已有摘要」和「较早的对话」合并成一段简洁的中文摘要，保留人物、关系、偏好、约定和未完成的话题，去掉寒暄与重复内容。' +
+            `只输出摘要正文，不要解释，不要使用 Markdown 或列表，长度不超过 ${summaryMaxChars} 个字符。`,
+        messages: [{ role: 'user', content: buildCompressInput(previousSummary, oldMessages, summaryMaxChars, { isGroup }) }],
         maxTokens: 800,
         temperature: 0.2,
         purpose: 'memory-compress'
       })
-      summaryText = clampText(String(result?.text ?? '').trim(), summaryMaxChars)
+      const rawSummary = String(result?.text ?? '').trim()
+      const personaName = isPlainObject(config.persona) ? config.persona.name : ''
+      summaryText = clampText(isGroup ? anonymizeGroupSummary(rawSummary, members, personaName) : rawSummary, summaryMaxChars)
       if (summaryText.trim() === '') throw new Error('摘要内容为空')
     } catch (error) {
       logger?.warn?.('上下文压缩失败，已回滚', { chatId, error: error?.message })

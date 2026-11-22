@@ -190,18 +190,18 @@ function groupSpeaker(userId = 'u1', name = '小明') {
   return { userId, name, isGroup: true }
 }
 
-test('群聊：对象输出分别写 chatFacts / memberFacts，并 upsertPerson', async () => {
+test('群聊：chatFacts 被忽略，只写当前发言者的 memberFacts', async () => {
   const reply = JSON.stringify({ chatFacts: ['群规：周末晚上开黑'], memberFacts: ['小明喜欢猫'] })
-  const { cleanup, memoryStore, extractor } = await setup({ llm: makeFakeLlm({ reply }) })
+  const { cleanup, memoryStore, extractor, llm } = await setup({ llm: makeFakeLlm({ reply }) })
   try {
     await seedConversation(memoryStore, 'group_g1', 1)
     const result = await extractor.maybeExtract({ chatId: 'group_g1', force: true, speaker: groupSpeaker() })
     assert.equal(result.extracted, true)
-    assert.deepEqual(result.facts, ['群规：周末晚上开黑'])
+    assert.deepEqual(result.facts, [])
     assert.deepEqual(result.memberFacts, ['小明喜欢猫'])
 
     const chat = await memoryStore.getChat('group_g1')
-    assert.deepEqual(chat.facts.map((fact) => fact.text), ['群规：周末晚上开黑'])
+    assert.deepEqual(chat.facts, [], 'group chat must not retain chat-wide facts')
 
     const member = await memoryStore.getChatMember('group_g1', 'u1')
     assert.equal(member.name, '小明')
@@ -210,6 +210,7 @@ test('群聊：对象输出分别写 chatFacts / memberFacts，并 upsertPerson'
     const person = await memoryStore.getPerson('u1')
     assert.equal(person.name, '小明')
     assert.deepEqual(person.facts, ['小明喜欢猫'])
+    assert.equal(llm.calls[0].system.includes('chatFacts 必须始终是空数组'), true)
   } finally {
     await cleanup()
   }
@@ -282,7 +283,7 @@ test('群聊：重复的成员事实返回 duplicate 且不新增', async () => 
   }
 })
 
-test('群聊：speaker 缺少 userId 时 memberFacts 归入 chatFacts', async () => {
+test('群聊：speaker 缺少 userId 时从最近用户消息归属成员，不写 chatFacts', async () => {
   const reply = JSON.stringify({ chatFacts: ['群友喜欢猫'], memberFacts: ['某人喜欢狗'] })
   const { cleanup, memoryStore, extractor } = await setup({ llm: makeFakeLlm({ reply }) })
   try {
@@ -293,9 +294,31 @@ test('群聊：speaker 缺少 userId 时 memberFacts 归入 chatFacts', async ()
       speaker: { name: '匿名', isGroup: true }
     })
     assert.equal(result.extracted, true)
-    assert.deepEqual(result.facts, ['群友喜欢猫', '某人喜欢狗'])
-    assert.deepEqual(result.memberFacts, [])
-    assert.deepEqual(await memoryStore.listChatMembers('group_g1'), [])
+    assert.deepEqual(result.facts, [])
+    assert.deepEqual(result.memberFacts, ['某人喜欢狗'])
+    assert.deepEqual((await memoryStore.getChat('group_g1')).facts, [])
+    const members = await memoryStore.listChatMembers('group_g1')
+    assert.equal(members.length, 1)
+    assert.equal(members[0].id, 'u1')
+    assert.deepEqual(members[0].facts.map((fact) => fact.text), ['某人喜欢狗'])
+  } finally {
+    await cleanup()
+  }
+})
+
+test('群聊手动抽取：从最近用户消息解析发言者，仍只写成员事实', async () => {
+  const reply = JSON.stringify({ chatFacts: [], memberFacts: ['小明最近在学做饭'] })
+  const { cleanup, memoryStore, extractor } = await setup({ llm: makeFakeLlm({ reply }) })
+  try {
+    await seedConversation(memoryStore, 'group_g1', 1, { userId: 'u1', userName: '小明' })
+    const result = await extractor.extractNow('group_g1')
+    assert.equal(result.extracted, true)
+    assert.deepEqual(result.facts, [])
+    assert.deepEqual(result.memberFacts, ['小明最近在学做饭'])
+    assert.deepEqual((await memoryStore.getChat('group_g1')).facts, [])
+    const member = await memoryStore.getChatMember('group_g1', 'u1')
+    assert.equal(member.name, '小明')
+    assert.deepEqual(member.facts.map((fact) => fact.text), ['小明最近在学做饭'])
   } finally {
     await cleanup()
   }
@@ -311,8 +334,11 @@ test('群聊抽取时给模型的 prompt 包含当前发言者与已有成员记
     const prompt = llm.calls[0].messages[0].content
     assert.ok(prompt.includes('当前发言者'))
     assert.ok(prompt.includes('小明住在杭州'))
-    assert.ok(prompt.includes('chatFacts'))
+    assert.ok(prompt.includes('"chatFacts":[]'))
+    assert.ok(prompt.includes('chatFacts 必须为空数组'))
     assert.ok(prompt.includes('memberFacts'))
+    assert.equal(prompt.includes('已有会话记忆'), false)
+    assert.ok(llm.calls[0].system.includes('禁止把任何内容写成会话级或群级长期事实'))
   } finally {
     await cleanup()
   }

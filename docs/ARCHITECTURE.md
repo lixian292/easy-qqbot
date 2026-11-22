@@ -41,7 +41,7 @@ qqbot/data/
 ├── budget/events.jsonl      # 每次 LLM 调用明细（追加写）
 ├── chats/<chatId>/history.jsonl  # 会话消息（追加写；压缩后重写）
 ├── chats/<chatId>/summary.json   # 上下文压缩摘要
-├── chats/<chatId>/memory.json    # 该会话的长期事实
+├── chats/<chatId>/memory.json    # 会话记忆：单聊长期事实；群聊旧数据仅保留兼容，不再注入/显示
 ├── chats/<chatId>/state.json     # 该会话的计数/状态（如上次记忆抽取）
 ├── chats/<chatId>/members/<id>.json  # 群聊按发言者 ID 保存的长期事实
 ├── people/<openid>.json     # 用户画像：昵称、事实、最后出现时间
@@ -83,7 +83,7 @@ QQ 网关(WebSocket) → gateway.js 解析 op/t
 | config | 默认值、类型校验、原子读写、密钥脱敏 | `host/config.js` |
 | QQ 接入 | access_token 刷新、`/gateway`、WebSocket 鉴权/心跳/重连、收发文本与富媒体 | `host/qq/*` |
 | 预算 | 每次调用记录 token/金额；日/月/会话三级限额；超限冷却 | `host/budget/store.js` |
-| 记忆 | 会话历史 JSONL、长期事实、用户画像、群成员按 ID 事实、按 token 阈值压缩摘要 | `host/memory/*` |
+| 记忆 | 会话历史 JSONL、单聊长期事实、用户画像、群成员按 ID 事实（群聊不再写会话级事实）、按 token 阈值压缩的群聊主题/氛围摘要 | `host/memory/*` |
 | 个性化 | 全局人设 + 会话级覆盖（人设/风格/模型/表情频率/记忆开关） | `host/persona/store.js` |
 | 多模态识别 | 可选：图片/音频/视频 → 中文描述；OpenAI 兼容接口，视频支持 ffmpeg 抽帧或 video_url | `host/multimodal/*` |
 | 多模态输出 | 可选：文字 → 图片（OpenAI 兼容，支持角色参考图 edits / generations）/ 语音（OpenAI 兼容 TTS）/ 视频（硅基流动、OpenAI Videos、自定义异步任务）；作品落盘与保留策略；聊天命令与模型指令 | `host/output/*` |

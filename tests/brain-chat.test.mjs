@@ -588,6 +588,22 @@ test('群聊：只把当前发言者的成员事实注入 system prompt', async 
   }
 })
 
+test('群聊不把会话级长期事实注入 prompt，只注入当前成员事实', async () => {
+  const { engine, llm, memoryStore, cleanup } = await setup()
+  try {
+    await memoryStore.addFacts('group_g1', ['群规：周末开黑'])
+    await memoryStore.addChatMemberFacts('group_g1', 'u1', ['小明喜欢猫'], { name: '小明' })
+    await engine.handleInbound(
+      makeInbound({ kind: 'group', chatId: 'group_g1', targetId: 'g1', userId: 'u1', userName: '小明', msgId: 'gm-facts' })
+    )
+    const system = llm.calls[0].system
+    assert.equal(system.includes('群规：周末开黑'), false)
+    assert.ok(system.includes('小明喜欢猫'))
+  } finally {
+    await cleanup()
+  }
+})
+
 test('群聊抽取传 speaker（isGroup=true）', async () => {
   const { engine, extractor, cleanup } = await setup()
   try {

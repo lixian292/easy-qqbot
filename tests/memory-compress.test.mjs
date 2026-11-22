@@ -75,6 +75,26 @@ test('超过阈值时压缩：保留最近消息并写入摘要', async () => {
   }
 })
 
+test('群聊摘要使用群友视角并强制匿名化成员名', async () => {
+  const llm = makeFakeLlm({ reply: '小明最近在群里聊做饭，群友们很活跃，整体氛围轻松。' })
+  const { cleanup, memoryStore, compressor } = await setup({ llm })
+  try {
+    await seed(memoryStore, 'group_g1', 8)
+    await memoryStore.addChatMemberFacts('group_g1', 'u1', ['喜欢猫'], { name: '小明' })
+    const result = await compressor.compressNow('group_g1')
+    assert.equal(result.compressed, true)
+    assert.equal(result.summary.includes('小明'), false)
+    assert.ok(result.summary.includes('群友'))
+    assert.ok(llm.calls[0].system.includes('群聊氛围与主题摘要'))
+    assert.ok(llm.calls[0].system.includes('讨论主题'))
+    assert.ok(llm.calls[0].system.includes('群友'))
+    assert.ok(llm.calls[0].system.includes('不要记录具体'))
+    assert.ok(llm.calls[0].messages[0].content.includes('群聊的讨论主题'))
+  } finally {
+    await cleanup()
+  }
+})
+
 test('LLM 失败时返回错误且历史保持原样', async () => {
   const { cleanup, memoryStore, compressor } = await setup({ llm: makeFakeLlm({ error: new Error('boom') }) })
   try {

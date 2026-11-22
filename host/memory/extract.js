@@ -25,9 +25,20 @@ const factKey = (text) => String(text ?? '').toLowerCase().replace(/\s+/g, '')
 const EXTRACT_SYSTEM_PROMPT =
   '你是一个记忆整理助手。请从对话中提取值得长期记住的事实。' +
   '只输出一个 JSON 对象，格式为 {"chatFacts":["..."],"memberFacts":["..."]}：' +
-  'chatFacts 是整个会话值得记住的事实（群聊约定、共同话题、重要事件等）；' +
+  'chatFacts 是整个单聊会话值得记住的事实（关系、偏好、约定等）；' +
   'memberFacts 是当前发言者本人的长期信息（身份、称呼、偏好、习惯、人际关系、约定等）。' +
   `两个数组各最多 ${MAX_NEW_FACTS} 条，每条不超过 ${MAX_FACT_CHARS} 个汉字；没有新增就输出 []。` +
+  '不要输出 JSON 之外的任何内容，不要解释。' +
+  '忽略寒暄、一次性话题和隐私敏感信息（密码、住址门牌号、证件号等）。'
+
+const GROUP_EXTRACT_SYSTEM_PROMPT =
+  '你是 QQ 群聊记忆整理助手。群聊的长期记忆必须按当前发言者的 ID 分开存储，' +
+  '禁止把任何内容写成会话级或群级长期事实。' +
+  '只输出一个 JSON 对象，格式为 {"chatFacts":[],"memberFacts":["..."]}。' +
+  'chatFacts 必须始终是空数组；memberFacts 只提取当前发言者本人的长期信息' +
+  '（身份、称呼、偏好、习惯、人际关系、约定等）。' +
+  `memberFacts 最多 ${MAX_NEW_FACTS} 条，每条不超过 ${MAX_FACT_CHARS} 个汉字；没有新增就输出 []。` +
+  '不要把群规、群共同话题、其他群友的信息或一次性的群聊事件写进 memberFacts。' +
   '不要输出 JSON 之外的任何内容，不要解释。' +
   '忽略寒暄、一次性话题和隐私敏感信息（密码、住址门牌号、证件号等）。'
 
@@ -214,18 +225,42 @@ export function createMemoryExtractor({ configStore, llmClient, memoryStore, log
     const transcript = formatTranscript(recent)
     if (transcript.trim() === '') return emptyResult
 
-    const existingChatFacts = factTexts(chat?.facts).slice(-MAX_PROMPT_FACTS)
-    const isGroup = speaker?.isGroup === true && typeof speaker?.userId === 'string' && speaker.userId !== ''
+    const groupChat = String(chatId).startsWith('group_') || chat?.kind === 'group'
+    let effectiveSpeaker = speaker
+    // Manual extraction from the admin page passes no speaker. For groups,
+    // attribute the extraction to the latest user message instead of creating
+    // a chat-wide fact.
+    if (groupChat && (!isPlainObject(effectiveSpeaker) || typeof effectiveSpeaker.userId !== 'string' || effectiveSpeaker.userId === '')) {
+      for (let index = recent.length - 1; index >= 0; index -= 1) {
+        const message = recent[index]
+        if (message?.role === 'user' && typeof message.userId === 'string' && message.userId !== '') {
+          effectiveSpeaker = {
+            userId: message.userId,
+            name: typeof message.userName === 'string' ? message.userName : '',
+            isGroup: true
+          }
+          break
+        }
+      }
+    }
+    const isGroup = groupChat && isPlainObject(effectiveSpeaker) && typeof effectiveSpeaker.userId === 'string' && effectiveSpeaker.userId !== ''
+    if (groupChat && !isGroup) {
+      logger?.warn?.('群聊记忆抽取缺少发言者 ID，已跳过', { chatId })
+      return { extracted: false, facts: [], memberFacts: [], reason: 'group-needs-speaker' }
+    }
+
+    // Group chats never keep chat-wide facts; every fact belongs to a member.
+    const existingChatFacts = isGroup ? [] : factTexts(chat?.facts).slice(-MAX_PROMPT_FACTS)
     let existingMemberFacts = []
-    let speakerName = typeof speaker?.name === 'string' ? speaker.name.trim().slice(0, 64) : ''
+    let speakerName = effectiveSpeaker && typeof effectiveSpeaker.name === 'string' ? effectiveSpeaker.name.trim().slice(0, 64) : ''
 
     if (isGroup && typeof memoryStore.getChatMember === 'function') {
       try {
-        const member = await memoryStore.getChatMember(chatId, speaker.userId)
+        const member = await memoryStore.getChatMember(chatId, effectiveSpeaker.userId)
         existingMemberFacts = factTexts(member?.facts)
         if (typeof member?.name === 'string' && member.name !== '') speakerName = member.name
       } catch (error) {
-        logger?.warn?.('读取群成员记忆失败', { chatId, userId: speaker.userId, error: error?.message })
+        logger?.warn?.('读取群成员记忆失败', { chatId, userId: effectiveSpeaker.userId, error: error?.message })
       }
     }
 
@@ -234,18 +269,22 @@ export function createMemoryExtractor({ configStore, llmClient, memoryStore, log
       parts.push(`【已有会话记忆】\n${existingChatFacts.map((fact) => `- ${fact}`).join('\n')}`)
     }
     if (isGroup) {
-      parts.push(`【当前发言者】${speakerName !== '' ? speakerName : speaker.userId}（ID: ${speaker.userId}）`)
+      parts.push(`【当前发言者】${speakerName !== '' ? speakerName : effectiveSpeaker.userId}（ID: ${effectiveSpeaker.userId}）`)
       if (existingMemberFacts.length > 0) {
         parts.push(`【该成员已有记忆】\n${existingMemberFacts.map((fact) => `- ${fact}`).join('\n')}`)
       }
     }
     parts.push(`【最近的对话】\n${transcript}`)
-    parts.push('请输出 JSON 对象：{"chatFacts":[...],"memberFacts":[...]}；没有新增事实就输出空数组。')
+    parts.push(
+      isGroup
+        ? '请输出 JSON 对象：{"chatFacts":[],"memberFacts":[...]}；chatFacts 必须为空数组，只记录当前发言者本人的长期信息；没有新增事实就输出空数组。'
+        : '请输出 JSON 对象：{"chatFacts":[...],"memberFacts":[...]}；没有新增事实就输出空数组。'
+    )
 
     let result
     try {
       result = await llmClient.complete({
-        system: EXTRACT_SYSTEM_PROMPT,
+        system: isGroup ? GROUP_EXTRACT_SYSTEM_PROMPT : EXTRACT_SYSTEM_PROMPT,
         messages: [{ role: 'user', content: parts.join('\n\n') }],
         maxTokens: 400,
         temperature: 0.2,
@@ -257,12 +296,13 @@ export function createMemoryExtractor({ configStore, llmClient, memoryStore, log
     }
 
     const parsed = parseExtractedMemory(result?.text)
-    let chatFacts = normalizeFactList(parsed.chatFacts)
+    // Even if the model ignores the instruction and returns group-level facts,
+    // drop them for group chats: those facts would be injected into every
+    // member's prompt, which is exactly what per-ID memory must avoid.
+    let chatFacts = isGroup ? [] : normalizeFactList(parsed.chatFacts)
     let memberFacts = normalizeFactList(parsed.memberFacts)
 
     // Single chats have no member store: keep everything on the chat record.
-    // Group extraction without a usable speaker id falls back the same way so
-    // the extracted information is not lost.
     if (!isGroup) {
       chatFacts = normalizeFactList([...chatFacts, ...memberFacts])
       memberFacts = []
@@ -272,9 +312,9 @@ export function createMemoryExtractor({ configStore, llmClient, memoryStore, log
     const newMemberFacts = isGroup ? newFactsOnly(memberFacts, existingMemberFacts) : []
 
     try {
-      if (chatFacts.length > 0) await memoryStore.addFacts(chatId, chatFacts)
+      if (!isGroup && chatFacts.length > 0) await memoryStore.addFacts(chatId, chatFacts)
       if (isGroup && memberFacts.length > 0 && typeof memoryStore.addChatMemberFacts === 'function') {
-        await memoryStore.addChatMemberFacts(chatId, speaker.userId, memberFacts, { name: speakerName })
+        await memoryStore.addChatMemberFacts(chatId, effectiveSpeaker.userId, memberFacts, { name: speakerName })
       }
       if (typeof memoryStore.setCounters === 'function') {
         await memoryStore.setCounters(chatId, { lastExtractAt: chat?.counters?.userMessages ?? 0 })
@@ -285,7 +325,7 @@ export function createMemoryExtractor({ configStore, llmClient, memoryStore, log
     }
 
     if (isGroup) {
-      if (newMemberFacts.length > 0) await upsertSpeakerPerson(speaker.userId, speakerName, newMemberFacts)
+      if (newMemberFacts.length > 0) await upsertSpeakerPerson(effectiveSpeaker.userId, speakerName, newMemberFacts)
     } else if (newChatFacts.length > 0) {
       await upsertPersonFromChat(chatId, newChatFacts)
     }

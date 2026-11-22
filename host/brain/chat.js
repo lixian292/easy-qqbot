@@ -499,7 +499,10 @@ export function createChatEngine({
     const system = buildSystemPrompt({
       config,
       persona,
-      facts: chatInfo?.facts ?? [],
+      // Group chats must never inject chat-wide facts: every member has their
+      // own memory record, and only the current speaker's facts are passed
+      // below via `speakerFacts`.
+      facts: isGroupChat ? [] : (chatInfo?.facts ?? []),
       summary: chatInfo?.summary ?? null,
       stickerCatalog,
       now: Date.now(),
