@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "QQ Bot",
-    "description": "Connects a QQ official bot to Harness: budget control, memory, context compression, per-chat personalization, sticker import and sticker replies."
+    "description": "Connects a QQ official bot to Harness with a cute blue-whale-girl default persona: budget control, memory, context compression, per-chat personalization, multimodal recognition and generation (image/voice/video, character reference images), sticker import and sticker replies."
   }
 }

@@ -50,7 +50,11 @@ export function createPaths({ packageRoot = PACKAGE_ROOT } = {}) {
     stickerTrash: path.join(data, 'stickers', 'trash'),
     logs: path.join(data, 'logs'),
     logFile: path.join(data, 'logs', 'qqbot.log'),
-    stats: path.join(data, 'stats.json')
+    stats: path.join(data, 'stats.json'),
+    outputs: path.join(data, 'outputs'),
+    outputIndex: path.join(data, 'outputs', 'index.json'),
+    references: path.join(data, 'references'),
+    referenceIndex: path.join(data, 'references', 'index.json')
   }
 
   /** Directories that must exist before the plugin starts. */
@@ -65,7 +69,9 @@ export function createPaths({ packageRoot = PACKAGE_ROOT } = {}) {
     paths.stickerCandidate,
     paths.stickerNegative,
     paths.stickerTrash,
-    paths.logs
+    paths.logs,
+    paths.outputs,
+    paths.references
   ]
 
   /** Map a sticker layer to its directory. */

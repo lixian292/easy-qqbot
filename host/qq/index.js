@@ -206,6 +206,13 @@ export function createQQClient({ ctx, configStore, logger, onInbound, fetchImpl,
     return result
   }
 
+  async function sendMedia(chat, media, options = {}) {
+    const activeSender = connectedSender()
+    const result = await activeSender.sendMedia(chat, media, options)
+    sent += 1
+    return result
+  }
+
   async function sendSticker(chat, sticker, options = {}) {
     const activeSender = connectedSender()
     const result = await activeSender.sendSticker(chat, sticker, options)
@@ -236,5 +243,5 @@ export function createQQClient({ ctx, configStore, logger, onInbound, fetchImpl,
     }
   }
 
-  return { start, stop, restart, status, sendText, sendImage, sendSticker, sendTyping, testAuth }
+  return { start, stop, restart, status, sendText, sendImage, sendMedia, sendSticker, sendTyping, testAuth }
 }

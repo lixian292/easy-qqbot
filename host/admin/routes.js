@@ -196,6 +196,14 @@ export function registerAdminRoutes({ ctx, app }) {
           await serveSticker(res, rest.slice('/media/sticker/'.length), headOnly)
           return
         }
+        if (rest.startsWith('/media/output/')) {
+          await serveOutput(res, rest.slice('/media/output/'.length), headOnly, req.headers?.range)
+          return
+        }
+        if (rest.startsWith('/media/reference/')) {
+          await serveReference(res, rest.slice('/media/reference/'.length), headOnly)
+          return
+        }
         sendJson(res, 404, { ok: false, error: 'not found' })
         return
       }
@@ -268,6 +276,108 @@ export function registerAdminRoutes({ ctx, app }) {
     } catch {
       sendJson(res, 404, { ok: false, error: 'sticker file missing' })
     }
+  }
+
+  /**
+   * Serve one generated asset. Audio/video tags need byte-range support for
+   * seeking, so a minimal single-range parser is included; multi-range
+   * requests fall back to the full body.
+   */
+  async function serveOutput(res, id, headOnly = false, rangeHeader = undefined) {
+    const outputId = String(id ?? '').split('?')[0].replace(/[^a-zA-Z0-9_-]/g, '')
+    if (!/^[a-zA-Z0-9]{6,64}$/.test(outputId)) {
+      sendJson(res, 404, { ok: false, error: 'invalid output id' })
+      return
+    }
+    if (app.outputStore === undefined || typeof app.outputStore.get !== 'function') {
+      sendJson(res, 404, { ok: false, error: 'output store unavailable' })
+      return
+    }
+    const item = await app.outputStore.get(outputId)
+    if (item === undefined || item === null) {
+      sendJson(res, 404, { ok: false, error: 'output not found' })
+      return
+    }
+    let data
+    try {
+      data = await fsp.readFile(app.outputStore.filePath(item))
+    } catch {
+      sendJson(res, 404, { ok: false, error: 'output file missing' })
+      return
+    }
+    const total = data.length
+    const contentType = typeof item.mime === 'string' && item.mime !== '' ? item.mime : 'application/octet-stream'
+    const range = parseByteRange(rangeHeader, total)
+    if (range !== null) {
+      const length = range.end - range.start + 1
+      res.writeHead(206, {
+        'content-type': contentType,
+        'content-length': String(length),
+        'content-range': `bytes ${range.start}-${range.end}/${total}`,
+        'accept-ranges': 'bytes',
+        'cache-control': 'private, max-age=86400'
+      })
+      res.end(headOnly ? undefined : data.subarray(range.start, range.end + 1))
+      return
+    }
+    res.writeHead(200, {
+      'content-type': contentType,
+      'content-length': String(total),
+      'accept-ranges': 'bytes',
+      'cache-control': 'private, max-age=86400'
+    })
+    res.end(headOnly ? undefined : data)
+  }
+
+  async function serveReference(res, id, headOnly = false) {
+    const referenceId = String(id ?? '').split('?')[0].replace(/[^a-zA-Z0-9_-]/g, '')
+    if (!/^[a-zA-Z0-9]{6,64}$/.test(referenceId)) {
+      sendJson(res, 404, { ok: false, error: 'invalid reference id' })
+      return
+    }
+    if (app.referenceStore === undefined || typeof app.referenceStore.get !== 'function') {
+      sendJson(res, 404, { ok: false, error: 'reference store unavailable' })
+      return
+    }
+    const item = await app.referenceStore.get(referenceId)
+    if (item === undefined || item === null) {
+      sendJson(res, 404, { ok: false, error: 'reference not found' })
+      return
+    }
+    try {
+      const data = await fsp.readFile(app.referenceStore.filePath(item))
+      res.writeHead(200, {
+        'content-type': item.mime || 'application/octet-stream',
+        'content-length': String(data.length),
+        'cache-control': 'private, max-age=86400'
+      })
+      res.end(headOnly ? undefined : data)
+    } catch {
+      sendJson(res, 404, { ok: false, error: 'reference file missing' })
+    }
+  }
+
+  function parseByteRange(header, total) {
+    if (typeof header !== 'string' || header === '' || total <= 0) return null
+    const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim())
+    if (match === null) return null
+    const startRaw = match[1]
+    const endRaw = match[2]
+    if (startRaw === '' && endRaw === '') return null
+    let start
+    let end
+    if (startRaw === '') {
+      const suffix = Number(endRaw)
+      if (!Number.isFinite(suffix) || suffix <= 0) return null
+      start = Math.max(0, total - suffix)
+      end = total - 1
+    } else {
+      start = Number(startRaw)
+      end = endRaw === '' ? total - 1 : Number(endRaw)
+    }
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start >= total) return null
+    if (end < start) return null
+    return { start, end: Math.min(end, total - 1) }
   }
 
   async function servePackageFile(res, file, contentType, maxAgeSeconds, headOnly = false) {
@@ -368,6 +478,86 @@ async function dispatch(method, args, app) {
       const started = Date.now()
       const result = await app.multimodalClient.describe({ kind: 'image', buffer: pixel, contentType: 'image/png' })
       return { ...result, ms: Date.now() - started }
+    }
+    case 'output.status':
+      return {
+        status: readOutputStatus(app),
+        store: typeof app.outputStore?.stats === 'function' ? app.outputStore.stats() : null
+      }
+    case 'output.test': {
+      const kind = requireOutputKind(args)
+      return app.outputClient.test({ kind })
+    }
+    case 'output.generate': {
+      const kind = requireOutputKind(args)
+      const prompt = requireString(args, 'prompt')
+      if (prompt.length > 2000) throw new Error('prompt 最多 2000 个字符')
+      if (typeof app.outputClient?.generate !== 'function') throw new Error('多模态输出服务不可用')
+      const result = await app.outputClient.generate({
+        kind,
+        prompt,
+        source: { kind: 'admin', chatId: typeof args.chatId === 'string' ? args.chatId : '' }
+      })
+      return {
+        kind: result.kind,
+        records: (Array.isArray(result.records) ? result.records : []).map(publicOutputRecord),
+        record: result.record ? publicOutputRecord(result.record) : null
+      }
+    }
+    case 'output.history': {
+      if (typeof app.outputStore?.list !== 'function') throw new Error('多模态输出作品库不可用')
+      const result = await app.outputStore.list({
+        kind: optionalString(args, 'kind'),
+        limit: clampInt(args.limit, 30, 1, 200),
+        offset: clampInt(args.offset, 0, 0, 1e9)
+      })
+      return { total: result.total, items: result.items.map(publicOutputRecord) }
+    }
+    case 'output.delete': {
+      const id = requireString(args, 'id')
+      const removed = await app.outputStore.remove(id)
+      return { ok: true, item: publicOutputRecord(removed) }
+    }
+    case 'output.clear': {
+      if (typeof app.outputStore?.clear !== 'function') throw new Error('多模态输出作品库不可用')
+      const kind = typeof args.kind === 'string' && args.kind !== '' ? requireOutputKind(args) : undefined
+      const result = await app.outputStore.clear(kind === undefined ? {} : { kind })
+      return { ok: true, ...result, store: app.outputStore.stats() }
+    }
+    case 'output.reference.list': {
+      if (typeof app.referenceStore?.list !== 'function') throw new Error('角色参考图存储不可用')
+      const listed = await app.referenceStore.list()
+      const activeId = app.configStore.get().output.image.reference.id
+      return {
+        items: listed.items.map(publicReference),
+        active: activeId,
+        settings: app.configStore.get().output.image.reference
+      }
+    }
+    case 'output.reference.upload': {
+      if (typeof app.referenceStore?.add !== 'function') throw new Error('角色参考图存储不可用')
+      const name = typeof args.name === 'string' && args.name.trim() !== '' ? args.name.trim() : 'reference'
+      const buffer = decodeBase64(args.dataBase64)
+      const item = await app.referenceStore.add({ buffer, mime: typeof args.mime === 'string' ? args.mime : '', originalName: name })
+      return { item: publicReference(item) }
+    }
+    case 'output.reference.activate': {
+      const id = requireString(args, 'id')
+      const item = await app.referenceStore.get(id)
+      if (item === undefined || item === null) throw new Error('找不到该参考图片')
+      const referencePatch = { id }
+      if (typeof args.enabled === 'boolean') referencePatch.enabled = args.enabled
+      const result = await app.configStore.save({ output: { image: { reference: referencePatch } } })
+      return { item: publicReference(item), config: app.configStore.public(), warnings: result.warnings ?? [] }
+    }
+    case 'output.reference.delete': {
+      const id = requireString(args, 'id')
+      const removed = await app.referenceStore.remove(id)
+      const activeId = app.configStore.get().output.image.reference.id
+      if (activeId === id) {
+        await app.configStore.save({ output: { image: { reference: { id: '' } } } })
+      }
+      return { ok: true, item: publicReference(removed), active: app.configStore.get().output.image.reference.id }
     }
     case 'budget.snapshot':
       return app.budgetStore.snapshot()
@@ -534,11 +724,13 @@ async function dispatch(method, args, app) {
 }
 
 async function snapshot(app) {
-  const [budget, stickerStats, chats, people] = await Promise.all([
+  const [budget, stickerStats, chats, people, outputStats, referenceList] = await Promise.all([
     app.budgetStore.snapshot(),
     app.stickerStore.stats(),
     app.memoryStore.listChats(),
-    app.memoryStore.listPeople()
+    app.memoryStore.listPeople(),
+    typeof app.outputStore?.stats === 'function' ? Promise.resolve(app.outputStore.stats()) : Promise.resolve(null),
+    typeof app.referenceStore?.list === 'function' ? app.referenceStore.list() : Promise.resolve({ items: [] })
   ])
   const config = app.configStore.get()
   return {
@@ -548,6 +740,12 @@ async function snapshot(app) {
     status: app.qqClient.status(),
     llm: { provider: config.llm.provider, model: config.llm.model },
     multimodal: readMultimodalStatus(app),
+    output: readOutputStatus(app),
+    outputs: outputStats,
+    references: {
+      items: (Array.isArray(referenceList?.items) ? referenceList.items : []).map(publicReference),
+      active: config.output.image.reference.id
+    },
     budget,
     stickers: { total: stickerStats.total, byLayer: stickerStats.byLayer, tags: stickerStats.tags },
     chats: chats.length,
@@ -562,6 +760,32 @@ function readMultimodalStatus(app) {
   } catch {
     return null
   }
+}
+
+function readOutputStatus(app) {
+  try {
+    return typeof app.outputClient?.status === 'function' ? app.outputClient.status() : null
+  } catch {
+    return null
+  }
+}
+
+function requireOutputKind(args) {
+  const kind = String(args?.kind ?? '').trim().toLowerCase()
+  if (!['image', 'audio', 'video'].includes(kind)) throw new Error(`参数 kind 必须是 image / audio / video，收到：${kind || '(空)'}`)
+  return kind
+}
+
+function publicOutputRecord(record) {
+  if (record === null || typeof record !== 'object') return null
+  const { filePath, ...rest } = record
+  return rest
+}
+
+function publicReference(record) {
+  if (record === null || typeof record !== 'object') return null
+  const { filePath, ...rest } = record
+  return rest
 }
 
 async function readChatMembers(app, chatId) {

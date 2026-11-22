@@ -6,6 +6,7 @@
  * handed to `llmClient.complete()`.
  */
 import { formatDateTime } from '../util/text.js'
+import { buildOutputInstruction } from '../output/directives.js'
 
 const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
 
@@ -83,7 +84,7 @@ export function buildSystemPrompt({
   const override = isPlainObject(persona) ? persona : {}
   const effective = { ...basePersona, ...override }
 
-  const name = String(effective.name ?? basePersona.name ?? '小Q').trim() || '小Q'
+  const name = String(effective.name ?? basePersona.name ?? '鲸鱼娘').trim() || '鲸鱼娘'
   const sections = [`你现在扮演「${name}」，正在 QQ 上和用户聊天。`]
 
   const systemPrompt = String(effective.systemPrompt ?? '').trim()
@@ -119,6 +120,9 @@ export function buildSystemPrompt({
     const stickerInstruction = buildStickerInstruction({ stickerCatalog, stickerChance: effective.stickerChance })
     if (stickerInstruction !== '') sections.push(`【表情包】\n${stickerInstruction}`)
   }
+
+  const outputInstruction = buildOutputInstruction({ output: configObject.output })
+  if (outputInstruction !== '') sections.push(`【多模态输出】\n${outputInstruction}`)
 
   sections.push('输出要求：只输出纯文本，不要使用 Markdown（不要标题、列表、代码块、粗体或链接语法）；像真人聊天一样直接说话，不要解释你是模型。')
 

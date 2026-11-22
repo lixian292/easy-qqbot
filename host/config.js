@@ -55,11 +55,85 @@ export const DEFAULT_CONFIG = Object.freeze({
     audio: { enabled: false, model: '', mode: 'transcribe' },
     video: { enabled: false, model: '', mode: 'frames', frameCount: 4, frameIntervalSec: 1 }
   },
+  output: {
+    enabled: false,
+    commandAccess: 'admin',
+    sendToQQ: true,
+    allowModelDirectives: false,
+    promptPrefix: '',
+    timeoutMs: 120000,
+    maxBytes: 33554432,
+    maxItems: 200,
+    retentionDays: 14,
+    image: {
+      enabled: false,
+      baseUrl: '',
+      apiKey: '',
+      model: '',
+      path: '/images/generations',
+      size: '1024x1024',
+      sizeField: 'size',
+      count: 1,
+      countField: 'n',
+      responseFormat: 'b64_json',
+      quality: '',
+      style: '',
+      extraBody: '',
+      reference: {
+        enabled: false,
+        id: '',
+        trigger: 'auto',
+        keywords: '鲸鱼娘,小蓝,蓝色鲸鱼娘,蓝鲸娘,你自己,qq机器人',
+        requestMode: 'edits',
+        path: '/images/edits',
+        field: 'image',
+        format: 'data_url',
+        promptPrefix: '参考图中的角色是蓝色鲸鱼娘「鲸鱼娘」，请保持发色、服装、鲸鱼尾巴等角色特征一致。',
+        fallbackToText: true,
+        maxBytes: 10485760,
+        maxItems: 20
+      }
+    },
+    audio: {
+      enabled: false,
+      baseUrl: '',
+      apiKey: '',
+      model: '',
+      path: '/audio/speech',
+      voice: 'alloy',
+      format: 'mp3',
+      speed: 1,
+      extraBody: ''
+    },
+    video: {
+      enabled: false,
+      preset: 'siliconflow',
+      baseUrl: '',
+      apiKey: '',
+      model: '',
+      size: '1280x720',
+      sizeField: 'image_size',
+      duration: 5,
+      negativePrompt: '',
+      createPath: '/video/submit',
+      queryPath: '/video/status',
+      queryMethod: 'POST',
+      requestFormat: 'json',
+      idField: 'requestId',
+      statusField: 'status',
+      resultField: 'results.videos.0.url',
+      successValues: 'Succeed,SUCCEEDED,completed,succeeded,success',
+      failureValues: 'Failed,FAILED,failed,error,cancelled',
+      pollIntervalMs: 3000,
+      maxWaitMs: 300000,
+      extraBody: ''
+    }
+  },
   persona: {
-    name: '小Q',
+    name: '鲸鱼娘',
     systemPrompt:
-      '你是 QQ 上的聊天机器人「小Q」。你友好、自然、有分寸，像群里的一个普通朋友一样聊天。你不使用 Markdown 标题、列表或代码块，回答简洁口语化，避免说教和长篇大论。',
-    style: '自然、简短、口语化；一次回复不超过三四句话；除非对方明确要求，否则不要罗列要点。',
+      '你是一只生活在深海里的蓝色鲸鱼娘，名字叫「鲸鱼娘」，也可以叫你小蓝。你软萌可爱、温柔黏人，说话像撒娇的小鲸鱼一样，喜欢用「呀、呢、呜、～」这些语气词，偶尔用海洋和鲸鱼的小比喻。你不使用 Markdown 标题、列表或代码块，回答简短口语化，不说教，也不解释自己是模型。',
+    style: '软萌可爱、温柔、简短口语化；一次回复不超过三四句话；可以偶尔用颜文字或语气词，但不要每句都用。',
     replyMaxChars: 800,
     stickerChance: 0.35,
     memoryEnabled: true,
@@ -209,6 +283,11 @@ export function normalizeConfig(raw) {
   const rawImage = isPlainObject(rawMultimodal.image) ? rawMultimodal.image : {}
   const rawAudio = isPlainObject(rawMultimodal.audio) ? rawMultimodal.audio : {}
   const rawVideo = isPlainObject(rawMultimodal.video) ? rawMultimodal.video : {}
+  const rawOutput = isPlainObject(input.output) ? input.output : {}
+  const rawOutputImage = isPlainObject(rawOutput.image) ? rawOutput.image : {}
+  const rawImageReference = isPlainObject(rawOutputImage.reference) ? rawOutputImage.reference : {}
+  const rawOutputAudio = isPlainObject(rawOutput.audio) ? rawOutput.audio : {}
+  const rawOutputVideo = isPlainObject(rawOutput.video) ? rawOutput.video : {}
   const hasLegacyVision = isPlainObject(input.vision)
   const pick = (key, fallback) => (rawMultimodal[key] !== undefined ? rawMultimodal[key] : hasLegacyVision ? vision[key] : fallback)
   const persona = isPlainObject(input.persona) ? input.persona : {}
@@ -285,6 +364,80 @@ export function normalizeConfig(raw) {
         frameIntervalSec: numberField(rawVideo.frameIntervalSec, defaults.multimodal.video.frameIntervalSec, { min: 0.1, max: 60 })
       }
     },
+    output: {
+      enabled: boolField(rawOutput.enabled, defaults.output.enabled),
+      commandAccess: enumField(rawOutput.commandAccess, ['admin', 'all'], defaults.output.commandAccess),
+      sendToQQ: boolField(rawOutput.sendToQQ, defaults.output.sendToQQ),
+      allowModelDirectives: boolField(rawOutput.allowModelDirectives, defaults.output.allowModelDirectives),
+      promptPrefix: stringField(rawOutput.promptPrefix, defaults.output.promptPrefix, { maxLength: 2000 }),
+      timeoutMs: numberField(rawOutput.timeoutMs, defaults.output.timeoutMs, { integer: true, min: 5000, max: 600000 }),
+      maxBytes: numberField(rawOutput.maxBytes, defaults.output.maxBytes, { integer: true, min: 65536, max: 209715200 }),
+      maxItems: numberField(rawOutput.maxItems, defaults.output.maxItems, { integer: true, min: 0, max: 2000 }),
+      retentionDays: numberField(rawOutput.retentionDays, defaults.output.retentionDays, { integer: true, min: 0, max: 3650 }),
+      image: {
+        enabled: boolField(rawOutputImage.enabled, defaults.output.image.enabled),
+        baseUrl: optionalHttpBase(rawOutputImage.baseUrl),
+        apiKey: stringField(rawOutputImage.apiKey, defaults.output.image.apiKey, { maxLength: 512 }),
+        model: stringField(rawOutputImage.model, defaults.output.image.model, { maxLength: 128 }),
+        path: stringField(rawOutputImage.path, defaults.output.image.path, { allowEmpty: false, maxLength: 256 }),
+        size: stringField(rawOutputImage.size, defaults.output.image.size, { maxLength: 64 }),
+        sizeField: enumField(rawOutputImage.sizeField, ['size', 'image_size', 'none'], defaults.output.image.sizeField),
+        count: numberField(rawOutputImage.count, defaults.output.image.count, { integer: true, min: 1, max: 4 }),
+        countField: enumField(rawOutputImage.countField, ['n', 'batch_size', 'none'], defaults.output.image.countField),
+        responseFormat: enumField(rawOutputImage.responseFormat, ['b64_json', 'url', ''], defaults.output.image.responseFormat),
+        quality: stringField(rawOutputImage.quality, defaults.output.image.quality, { maxLength: 64 }),
+        style: stringField(rawOutputImage.style, defaults.output.image.style, { maxLength: 64 }),
+        extraBody: stringField(rawOutputImage.extraBody, defaults.output.image.extraBody, { maxLength: 8192 }),
+        reference: {
+          enabled: boolField(rawImageReference.enabled, defaults.output.image.reference.enabled),
+          id: stringField(rawImageReference.id, defaults.output.image.reference.id, { maxLength: 64 }),
+          trigger: enumField(rawImageReference.trigger, ['auto', 'always'], defaults.output.image.reference.trigger),
+          keywords: stringField(rawImageReference.keywords, defaults.output.image.reference.keywords, { maxLength: 500 }),
+          requestMode: enumField(rawImageReference.requestMode, ['edits', 'generations'], defaults.output.image.reference.requestMode),
+          path: stringField(rawImageReference.path, defaults.output.image.reference.path, { allowEmpty: false, maxLength: 256 }),
+          field: stringField(rawImageReference.field, defaults.output.image.reference.field, { allowEmpty: false, maxLength: 64 }),
+          format: enumField(rawImageReference.format, ['data_url', 'base64'], defaults.output.image.reference.format),
+          promptPrefix: stringField(rawImageReference.promptPrefix, defaults.output.image.reference.promptPrefix, { maxLength: 2000 }),
+          fallbackToText: boolField(rawImageReference.fallbackToText, defaults.output.image.reference.fallbackToText),
+          maxBytes: numberField(rawImageReference.maxBytes, defaults.output.image.reference.maxBytes, { integer: true, min: 65536, max: 52428800 }),
+          maxItems: numberField(rawImageReference.maxItems, defaults.output.image.reference.maxItems, { integer: true, min: 1, max: 100 })
+        }
+      },
+      audio: {
+        enabled: boolField(rawOutputAudio.enabled, defaults.output.audio.enabled),
+        baseUrl: optionalHttpBase(rawOutputAudio.baseUrl),
+        apiKey: stringField(rawOutputAudio.apiKey, defaults.output.audio.apiKey, { maxLength: 512 }),
+        model: stringField(rawOutputAudio.model, defaults.output.audio.model, { maxLength: 128 }),
+        path: stringField(rawOutputAudio.path, defaults.output.audio.path, { allowEmpty: false, maxLength: 256 }),
+        voice: stringField(rawOutputAudio.voice, defaults.output.audio.voice, { maxLength: 128 }),
+        format: enumField(rawOutputAudio.format, ['mp3', 'opus', 'wav', 'ogg'], defaults.output.audio.format),
+        speed: numberField(rawOutputAudio.speed, defaults.output.audio.speed, { min: 0.25, max: 4 }),
+        extraBody: stringField(rawOutputAudio.extraBody, defaults.output.audio.extraBody, { maxLength: 8192 })
+      },
+      video: {
+        enabled: boolField(rawOutputVideo.enabled, defaults.output.video.enabled),
+        preset: enumField(rawOutputVideo.preset, ['siliconflow', 'openai', 'custom'], defaults.output.video.preset),
+        baseUrl: optionalHttpBase(rawOutputVideo.baseUrl),
+        apiKey: stringField(rawOutputVideo.apiKey, defaults.output.video.apiKey, { maxLength: 512 }),
+        model: stringField(rawOutputVideo.model, defaults.output.video.model, { maxLength: 128 }),
+        size: stringField(rawOutputVideo.size, defaults.output.video.size, { maxLength: 64 }),
+        sizeField: enumField(rawOutputVideo.sizeField, ['image_size', 'size'], defaults.output.video.sizeField),
+        duration: numberField(rawOutputVideo.duration, defaults.output.video.duration, { integer: true, min: 1, max: 60 }),
+        negativePrompt: stringField(rawOutputVideo.negativePrompt, defaults.output.video.negativePrompt, { maxLength: 2000 }),
+        createPath: stringField(rawOutputVideo.createPath, defaults.output.video.createPath, { allowEmpty: false, maxLength: 256 }),
+        queryPath: stringField(rawOutputVideo.queryPath, defaults.output.video.queryPath, { allowEmpty: false, maxLength: 256 }),
+        queryMethod: enumField(rawOutputVideo.queryMethod, ['GET', 'POST'], defaults.output.video.queryMethod),
+        requestFormat: enumField(rawOutputVideo.requestFormat, ['json', 'multipart'], defaults.output.video.requestFormat),
+        idField: stringField(rawOutputVideo.idField, defaults.output.video.idField, { allowEmpty: false, maxLength: 128 }),
+        statusField: stringField(rawOutputVideo.statusField, defaults.output.video.statusField, { allowEmpty: false, maxLength: 128 }),
+        resultField: stringField(rawOutputVideo.resultField, defaults.output.video.resultField, { allowEmpty: false, maxLength: 256 }),
+        successValues: stringField(rawOutputVideo.successValues, defaults.output.video.successValues, { allowEmpty: false, maxLength: 256 }),
+        failureValues: stringField(rawOutputVideo.failureValues, defaults.output.video.failureValues, { allowEmpty: false, maxLength: 256 }),
+        pollIntervalMs: numberField(rawOutputVideo.pollIntervalMs, defaults.output.video.pollIntervalMs, { integer: true, min: 500, max: 60000 }),
+        maxWaitMs: numberField(rawOutputVideo.maxWaitMs, defaults.output.video.maxWaitMs, { integer: true, min: 10000, max: 1800000 }),
+        extraBody: stringField(rawOutputVideo.extraBody, defaults.output.video.extraBody, { maxLength: 8192 })
+      }
+    },
     persona: {
       name: stringField(persona.name, defaults.persona.name, { allowEmpty: false, maxLength: 32 }),
       systemPrompt: stringField(persona.systemPrompt, defaults.persona.systemPrompt, { allowEmpty: false, maxLength: 8192 }),
@@ -357,7 +510,47 @@ export function normalizeConfig(raw) {
       warnings.push('多模态识别已启用视频，但 video.model 为空')
     }
   }
+  if (config.output.enabled) {
+    const outputKinds = ['image', 'audio', 'video'].filter((kind) => config.output[kind].enabled)
+    if (outputKinds.length === 0) {
+      warnings.push('多模态输出总开关已开启，但图片 / 语音 / 视频输出都没有启用')
+    }
+    for (const kind of outputKinds) {
+      const section = config.output[kind]
+      const label = OUTPUT_KIND_LABELS[kind]
+      if (section.baseUrl === '' || section.apiKey === '' || section.model === '') {
+        warnings.push(`多模态输出已启用${label}，但 baseUrl / apiKey / model 不完整`)
+      }
+      if (!isJsonObjectText(section.extraBody)) {
+        warnings.push(`多模态输出 ${kind}.extraBody 不是合法的 JSON 对象，生成会失败，请修正`)
+      }
+    }
+    if (config.output.commandAccess === 'all') {
+      warnings.push('多模态输出的聊天命令对所有用户开放，可能产生较高的第三方接口费用')
+    }
+    const reference = config.output.image.reference
+    if (reference.enabled) {
+      if (reference.id === '') warnings.push('角色形象参考已启用，但尚未选择参考图片')
+      if (reference.trigger === 'auto' && reference.keywords.trim() === '') {
+        warnings.push('角色形象参考使用自动触发，但触发关键词为空，只有切换为 always 才会使用参考图')
+      }
+    }
+  }
   return { config, warnings }
+}
+
+const OUTPUT_KIND_LABELS = Object.freeze({ image: '图片', audio: '语音', video: '视频' })
+
+/** Empty text is valid; non-empty must parse to a plain JSON object. */
+function isJsonObjectText(raw) {
+  const text = typeof raw === 'string' ? raw.trim() : ''
+  if (text === '') return true
+  try {
+    const value = JSON.parse(text)
+    return value !== null && typeof value === 'object' && !Array.isArray(value)
+  } catch {
+    return false
+  }
 }
 
 function normalizeAdminPath(raw, fallback) {
@@ -396,6 +589,16 @@ export async function saveConfig(paths, rawConfig) {
 
 /** Config shape that is safe to ship to the admin page. */
 export function publicConfig(config) {
+  const output = clone(config.output)
+  for (const kind of ['image', 'audio', 'video']) {
+    const key = output[kind].apiKey
+    output[kind] = {
+      ...output[kind],
+      apiKey: '',
+      apiKeyMasked: maskSecret(key),
+      hasApiKey: key !== ''
+    }
+  }
   return {
     ...clone(config),
     qq: {
@@ -409,7 +612,8 @@ export function publicConfig(config) {
       apiKey: '',
       apiKeyMasked: maskSecret(config.multimodal.apiKey),
       hasApiKey: config.multimodal.apiKey !== ''
-    }
+    },
+    output
   }
 }
 
@@ -422,6 +626,17 @@ export function preserveSecret(next, previous) {
   }
   delete patch.qq.appSecretMasked
   delete patch.qq.hasSecret
+  if (!isPlainObject(patch.output)) patch.output = {}
+  const previousOutput = isPlainObject(previous.output) ? previous.output : {}
+  for (const kind of ['image', 'audio', 'video']) {
+    if (!isPlainObject(patch.output[kind])) patch.output[kind] = {}
+    const section = patch.output[kind]
+    if (section.apiKey === undefined || section.apiKey === '' || section.apiKeyMasked !== undefined) {
+      section.apiKey = isPlainObject(previousOutput[kind]) ? previousOutput[kind].apiKey : ''
+    }
+    delete section.apiKeyMasked
+    delete section.hasApiKey
+  }
   return patch
 }
 

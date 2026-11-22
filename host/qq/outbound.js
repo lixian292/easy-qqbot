@@ -53,7 +53,7 @@ export function createSender({ api, configStore, logger } = {}) {
   const passiveTracker = new Map()
   /** @type {Map<string, {fileInfo: string, expiresAt: number}>} */
   const fileInfoCache = new Map()
-  const counters = { text: 0, image: 0, sticker: 0, typing: 0, passive: 0, active: 0, failed: 0, uploaded: 0 }
+  const counters = { text: 0, image: 0, media: 0, sticker: 0, typing: 0, passive: 0, active: 0, failed: 0, uploaded: 0 }
 
   function config() {
     try {
@@ -188,8 +188,34 @@ export function createSender({ api, configStore, logger } = {}) {
     return { ids, passive: usedPassive }
   }
 
-  async function loadImage(media) {
-    if (media === null || typeof media !== 'object') throw new Error('缺少图片内容')
+  const FILE_TYPE_LABELS = Object.freeze({ 1: '图片', 2: '视频', 3: '语音', 4: '文件' })
+  const FILE_TYPE_DEFAULTS = Object.freeze({
+    1: { ext: 'jpg', prefix: 'image' },
+    2: { ext: 'mp4', prefix: 'video' },
+    3: { ext: 'mp3', prefix: 'voice' },
+    4: { ext: 'bin', prefix: 'file' }
+  })
+
+  function normalizeFileType(value) {
+    const number = Number(value)
+    return [1, 2, 3, 4].includes(number) ? number : 1
+  }
+
+  function inferFileType(media, fallback = 1) {
+    const kind = String(media?.kind ?? '').trim().toLowerCase()
+    if (kind === 'image') return 1
+    if (kind === 'video') return 2
+    if (kind === 'audio') return 3
+    const mime = String(media?.mime ?? '').toLowerCase()
+    if (mime.startsWith('image/')) return 1
+    if (mime.startsWith('video/')) return 2
+    if (mime.startsWith('audio/')) return 3
+    return normalizeFileType(fallback)
+  }
+
+  async function loadMedia(media, fileType) {
+    const label = FILE_TYPE_LABELS[normalizeFileType(fileType)] ?? '媒体'
+    if (media === null || typeof media !== 'object') throw new Error(`缺少${label}内容`)
     let buffer = null
     let sourceName = ''
     if (Buffer.isBuffer(media.buffer)) buffer = media.buffer
@@ -198,25 +224,27 @@ export function createSender({ api, configStore, logger } = {}) {
       try {
         buffer = await fsp.readFile(media.filePath)
       } catch (error) {
-        throw new Error(`读取图片失败：${error?.message ?? String(error)}`, { cause: error })
+        throw new Error(`读取${label}失败：${error?.message ?? String(error)}`, { cause: error })
       }
       sourceName = path.basename(media.filePath)
     }
-    if (buffer === null || buffer.length === 0) throw new Error('图片内容为空')
+    if (buffer === null || buffer.length === 0) throw new Error(`${label}内容为空`)
     const explicitName = typeof media.fileName === 'string' && media.fileName !== '' ? media.fileName : ''
-    const fileName = explicitName !== '' ? explicitName : sourceName !== '' ? sourceName : `image-${Date.now()}.jpg`
+    const defaults = FILE_TYPE_DEFAULTS[normalizeFileType(fileType)] ?? FILE_TYPE_DEFAULTS[1]
+    const fileName = explicitName !== '' ? explicitName : sourceName !== '' ? sourceName : `${defaults.prefix}-${Date.now()}.${defaults.ext}`
     return { buffer, fileName }
   }
 
-  async function resolveFileInfo(target, { buffer, fileName }) {
+  async function resolveFileInfo(target, { buffer, fileName }, fileType) {
     const fingerprint = sha256Buffer(buffer)
-    const cacheKey = `${target.kind}:${target.targetId}:${fingerprint}:${fileName}`
+    const type = normalizeFileType(fileType)
+    const cacheKey = `${target.kind}:${target.targetId}:${type}:${fingerprint}:${fileName}`
     const now = Date.now()
     const cached = fileInfoCache.get(cacheKey)
     if (cached !== undefined && cached.expiresAt > now) return cached.fileInfo
-    const uploaded = await api.uploadMedia({ kind: target.kind, targetId: target.targetId, buffer, fileName, fileType: 1 })
+    const uploaded = await api.uploadMedia({ kind: target.kind, targetId: target.targetId, buffer, fileName, fileType: type })
     const fileInfo = typeof uploaded?.fileInfo === 'string' ? uploaded.fileInfo : ''
-    if (fileInfo === '') throw new Error('上传图片失败：QQ 接口未返回 file_info')
+    if (fileInfo === '') throw new Error(`上传${FILE_TYPE_LABELS[type] ?? '媒体'}失败：QQ 接口未返回 file_info`)
     const ttl = Number(uploaded?.ttl) > 0 ? Number(uploaded.ttl) : 0
     const expiresAt = ttl > 60 ? now + ttl * 1000 - 60000 : now + FILE_INFO_MIN_CACHE_MS
     fileInfoCache.set(cacheKey, { fileInfo, expiresAt })
@@ -225,16 +253,19 @@ export function createSender({ api, configStore, logger } = {}) {
     return fileInfo
   }
 
-  async function sendImageInternal(chat, media, options = {}) {
+  async function sendMediaInternal(chat, media, options = {}) {
     const target = chatTarget(chat)
     const replyTo = options?.replyTo
-    const loaded = await loadImage(media)
-    const fileInfo = await resolveFileInfo(target, loaded)
+    const fileType = normalizeFileType(options?.fileType ?? inferFileType(media))
+    const label = FILE_TYPE_LABELS[fileType] ?? '媒体'
+    const loaded = await loadMedia(media, fileType)
+    const fileInfo = await resolveFileInfo(target, loaded, fileType)
     const now = Date.now()
     prunePassive(now)
     const state = replyState(target, replyTo, now)
+    const sendFn = typeof api.sendMedia === 'function' ? api.sendMedia : api.sendImage
     const send = (passive) =>
-      api.sendImage({
+      sendFn({
         kind: target.kind,
         targetId: target.targetId,
         fileInfo,
@@ -248,7 +279,7 @@ export function createSender({ api, configStore, logger } = {}) {
         response = await send(true)
         markPassive(state)
       } catch (error) {
-        log.warn?.('被动回复图片失败，改为主动消息', { error: error?.message ?? String(error), code: error?.code })
+        log.warn?.(`被动回复${label}失败，改为主动消息`, { error: error?.message ?? String(error), code: error?.code })
         burnPassive(state)
         response = null
       }
@@ -259,7 +290,7 @@ export function createSender({ api, configStore, logger } = {}) {
         counters.active += 1
       } catch (error) {
         counters.failed += 1
-        log.error?.('发送 QQ 图片失败', { error: error?.message ?? String(error), code: error?.code })
+        log.error?.(`发送 QQ ${label}失败`, { error: error?.message ?? String(error), code: error?.code })
         throw error
       }
     }
@@ -267,8 +298,15 @@ export function createSender({ api, configStore, logger } = {}) {
   }
 
   async function sendImage(chat, media, options = {}) {
-    const result = await sendImageInternal(chat, media, options)
+    const result = await sendMediaInternal(chat, media, { ...options, fileType: 1 })
     counters.image += 1
+    return result
+  }
+
+  /** Send an image / video / voice file (QQ rich media, msg_type 7). */
+  async function sendMedia(chat, media, options = {}) {
+    const result = await sendMediaInternal(chat, media, options)
+    counters.media += 1
     return result
   }
 
@@ -278,7 +316,7 @@ export function createSender({ api, configStore, logger } = {}) {
     if (filePath === '') throw new Error('缺少表情包文件路径')
     const ext = path.extname(filePath)
     const idPart = typeof sticker.id === 'string' && sticker.id !== '' ? sticker.id : path.basename(filePath, ext)
-    const result = await sendImageInternal(chat, { filePath, fileName: `sticker-${idPart}${ext !== '' ? ext : '.png'}` }, options)
+    const result = await sendMediaInternal(chat, { filePath, fileName: `sticker-${idPart}${ext !== '' ? ext : '.png'}` }, { ...options, fileType: 1 })
     counters.sticker += 1
     return result
   }
@@ -309,5 +347,5 @@ export function createSender({ api, configStore, logger } = {}) {
     return { ...counters }
   }
 
-  return { sendText, sendImage, sendSticker, sendTyping, clearCache, stats }
+  return { sendText, sendImage, sendMedia, sendSticker, sendTyping, clearCache, stats }
 }

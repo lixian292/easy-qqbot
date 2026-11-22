@@ -25,6 +25,28 @@ function makeQQClient() {
     async sendImage(chat, media, options) {
       sent.push({ type: 'image', chat, media, options })
       return { id: 'i1' }
+    },
+    async sendMedia(chat, media, options) {
+      sent.push({ type: 'media', chat, media, options })
+      return { id: 'md1' }
+    }
+  }
+}
+
+function makeOutputClient(overrides = {}) {
+  return {
+    calls: [],
+    async generate(args) {
+      this.calls.push(args)
+      if (overrides.error) throw overrides.error
+      const record = {
+        id: 'gen-1',
+        kind: args.kind,
+        mime: args.kind === 'image' ? 'image/png' : args.kind === 'audio' ? 'audio/mpeg' : 'video/mp4',
+        filePath: `C:/tmp/generated-${args.kind}`,
+        prompt: args.prompt
+      }
+      return { kind: args.kind, record, records: [record] }
     }
   }
 }
@@ -72,6 +94,7 @@ async function setup(overrides = {}) {
       return { handled: false }
     }
   }
+  const outputClient = overrides.outputClient ?? null
   const engine = createChatEngine({
     configStore,
     personaStore,
@@ -83,6 +106,7 @@ async function setup(overrides = {}) {
     stickerStore: overrides.stickerStore,
     stickerSelector,
     commandHandler,
+    outputClient,
     qqClient,
     logger,
     captureIncomingImage: overrides.captureIncomingImage,
@@ -102,6 +126,7 @@ async function setup(overrides = {}) {
     extractor,
     stickerSelector,
     commandHandler,
+    outputClient,
     engine
   }
 }
@@ -130,7 +155,7 @@ test('正常流程：回复文本、记录预算、写会话历史并异步抽�
 
     assert.equal(llm.calls.length, 1)
     assert.equal(llm.calls[0].purpose, 'chat')
-    assert.ok(llm.calls[0].system.includes('小Q'))
+    assert.ok(llm.calls[0].system.includes('鲸鱼娘'))
     assert.deepEqual(llm.calls[0].messages[llm.calls[0].messages.length - 1], { role: 'user', content: '在吗' })
 
     assert.equal(qqClient.sent.length, 1)
@@ -605,6 +630,113 @@ test('群聊没有成员事实时 prompt 不含成员记忆段', async () => {
       makeInbound({ kind: 'group', chatId: 'group_g1', targetId: 'g1', userId: 'u9', userName: '路人', msgId: 'gm9' })
     )
     assert.equal(llm.calls[0].system.includes('当前群成员'), false)
+  } finally {
+    await cleanup()
+  }
+})
+
+test('命令 followUp 生成结果通过 sendMedia 发送到 QQ', async () => {
+  const { engine, qqClient, cleanup } = await setup({
+    commandHandler: {
+      async tryHandle() {
+        return {
+          handled: true,
+          text: '正在生成图片…',
+          followUp: async () => ({
+            media: { id: 'gen-1', kind: 'image', mime: 'image/png', filePath: 'C:/tmp/generated.png' }
+          })
+        }
+      }
+    }
+  })
+  try {
+    await engine.handleInbound(makeInbound())
+    const media = await waitFor(() => qqClient.sent.find((item) => item.type === 'media'))
+    assert.equal(media.options.fileType, 1)
+    assert.equal(media.media.filePath, 'C:/tmp/generated.png')
+    assert.ok(qqClient.sent.some((item) => item.type === 'text' && item.text === '正在生成图片…'))
+  } finally {
+    await cleanup()
+  }
+})
+
+test('命令 followUp 发送失败时回一条中文提示', async () => {
+  const failingQQ = {
+    sent: [],
+    async sendText(chat, text) {
+      this.sent.push({ type: 'text', text })
+      return { ids: ['1'] }
+    },
+    async sendMedia() {
+      throw new Error('qq upload rejected')
+    }
+  }
+  const { engine, cleanup } = await setup({
+    qqClient: failingQQ,
+    commandHandler: {
+      async tryHandle() {
+        return {
+          handled: true,
+          text: '正在生成语音…',
+          followUp: async () => ({ media: { id: 'g', kind: 'audio', mime: 'audio/mpeg', filePath: 'C:/tmp/g.mp3' } })
+        }
+      }
+    }
+  })
+  try {
+    await engine.handleInbound(makeInbound())
+    await waitFor(() => failingQQ.sent.some((item) => item.text.includes('发送失败')))
+  } finally {
+    await cleanup()
+  }
+})
+
+test('模型输出 [[image: ...]] 指令：先回文本，再后台生成并发送媒体', async () => {
+  const { engine, qqClient, outputClient, cleanup } = await setup({
+    config: {
+      output: {
+        enabled: true,
+        allowModelDirectives: true,
+        image: { enabled: true, baseUrl: 'https://api.example.com/v1', apiKey: 'k', model: 'm' }
+      }
+    },
+    llm: makeFakeLlm({ reply: '画好啦 [[image: 一只在窗台上的橘猫]]' }),
+    outputClient: makeOutputClient()
+  })
+  try {
+    await engine.handleInbound(makeInbound())
+    const media = await waitFor(() => qqClient.sent.find((item) => item.type === 'media'))
+    assert.equal(media.options.fileType, 1)
+    const text = qqClient.sent.find((item) => item.type === 'text')
+    assert.equal(text.text.includes('[['), false, 'directive must be stripped from visible text')
+    assert.equal(text.text, '画好啦')
+    assert.equal(outputClient.calls.length, 1)
+    assert.equal(outputClient.calls[0].kind, 'image')
+    assert.equal(outputClient.calls[0].prompt, '一只在窗台上的橘猫')
+    assert.equal(outputClient.calls[0].source.kind, 'model')
+  } finally {
+    await cleanup()
+  }
+})
+
+test('未开启 allowModelDirectives 时只剥离指令、不生成', async () => {
+  const { engine, qqClient, outputClient, cleanup } = await setup({
+    config: {
+      output: {
+        enabled: true,
+        allowModelDirectives: false,
+        image: { enabled: true, baseUrl: 'https://api.example.com/v1', apiKey: 'k', model: 'm' }
+      }
+    },
+    llm: makeFakeLlm({ reply: '画好啦 [[image: 一只猫]]' }),
+    outputClient: makeOutputClient()
+  })
+  try {
+    await engine.handleInbound(makeInbound())
+    assert.equal(outputClient.calls.length, 0)
+    const text = qqClient.sent.find((item) => item.type === 'text')
+    assert.equal(text.text, '画好啦')
+    assert.equal(qqClient.sent.some((item) => item.type === 'media'), false)
   } finally {
     await cleanup()
   }

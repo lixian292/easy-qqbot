@@ -21,7 +21,7 @@ test('init 空配置返回空结构，resolve 使用全局默认人设', async (
     assert.deepEqual(await store.list(), { chats: {}, users: {} })
 
     const persona = await store.resolve({ chatId: 'c2c_u1', userId: 'u1', kind: 'c2c' })
-    assert.equal(persona.name, '小Q')
+    assert.equal(persona.name, '鲸鱼娘')
     assert.equal(persona.replyMaxChars, 800)
     assert.equal(persona.stickerChance, 0.35)
     assert.equal(persona.memoryEnabled, true)

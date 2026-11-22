@@ -20,6 +20,7 @@
   var BASE_PATH = window.location.pathname.replace(/\/+$/, '');
   var API_URL = BASE_PATH + '/api';
   var MEDIA_ROOT = BASE_PATH + '/media/sticker';
+  var OUTPUT_MEDIA_ROOT = BASE_PATH + '/media/output';
 
   // ---------------------------------------------------------------------------
   // Small helpers
@@ -226,6 +227,75 @@
     error: '错误'
   };
 
+  var OUTPUT_KIND_LABELS = { image: '图片', audio: '语音', video: '视频' };
+  var OUTPUT_KIND_ICONS = { image: '▧', audio: '♫', video: '▶' };
+  var OUTPUT_KIND_PROMPTS = {
+    image: '一只在窗台上晒太阳的橘猫，水彩风格，细节丰富',
+    audio: '你好呀，今天也要开心。',
+    video: '海边日落，镜头缓慢向前推进，暖色调'
+  };
+
+  // Navigation is grouped by user task instead of a flat tab strip: each item
+  // may point at a config section so the large settings form is reachable in
+  // one click. `desc` doubles as the nav search text.
+  var NAV_GROUPS = [
+    {
+      title: '运行',
+      items: [{ id: 'overview', label: '概览', desc: '状态、警告与快捷入口', icon: '◎' }]
+    },
+    {
+      title: '智能能力',
+      items: [
+        { id: 'output', label: '多模态输出', desc: '图片 / 语音 / 视频生成与接口配置', icon: '✦' },
+        { id: 'config', section: 'multimodal', label: '多模态识别', desc: '图片 / 语音 / 视频理解（输入）', icon: '◉' },
+        { id: 'config', section: 'llm', label: '对话模型', desc: 'Provider / 模型 / 温度', icon: '◈' },
+        { id: 'config', section: 'persona', label: '人设', desc: '名字 / 系统提示 / 说话风格', icon: '☺' },
+        { id: 'config', section: 'memory', label: '记忆与压缩', desc: '长期事实、摘要与上下文长度', icon: '▤' }
+      ]
+    },
+    {
+      title: '聊天运营',
+      items: [
+        { id: 'budget', label: '预算', desc: '今日 / 本月用量、限额与明细', icon: '¥' },
+        { id: 'chats', label: '会话', desc: '历史消息、摘要、人设覆盖', icon: '▣' },
+        { id: 'people', label: '人员', desc: '用户画像与长期事实', icon: '☷' }
+      ]
+    },
+    {
+      title: '内容',
+      items: [{ id: 'stickers', label: '表情包', desc: '导入、打标、图层与聊天挑选', icon: '❏' }]
+    },
+    {
+      title: '系统',
+      items: [
+        { id: 'config', label: '全部配置', desc: 'QQ 接入、命令、管理员与日志', icon: '⚙' },
+        { id: 'logs', label: '日志', desc: '最近运行日志与调试', icon: '≡' }
+      ]
+    }
+  ];
+
+  var PAGE_META = {
+    overview: { group: '运行', title: '概览', desc: '运行状态与快捷入口' },
+    output: { group: '智能能力', title: '多模态输出', desc: '图片 / 语音 / 视频生成' },
+    config: { group: '系统', title: '全部配置', desc: '按分区管理插件配置' },
+    stickers: { group: '内容', title: '表情包', desc: '导入、打标与图层' },
+    budget: { group: '聊天运营', title: '预算', desc: '用量、限额与调用明细' },
+    chats: { group: '聊天运营', title: '会话', desc: '历史、摘要与记忆' },
+    people: { group: '聊天运营', title: '人员', desc: '用户画像与事实' },
+    logs: { group: '系统', title: '日志', desc: '最近运行日志' }
+  };
+
+  var QUICK_LINKS = [
+    { nav: 'output', label: '多模态输出', desc: '配置图片 / 语音 / 视频接口并试跑', icon: '✦' },
+    { nav: 'stickers', label: '表情包打标', desc: '导入图片、打标签、转入正式库', icon: '❏' },
+    { nav: 'budget', label: '预算与用量', desc: '查看限额、消耗与最近调用', icon: '¥' },
+    { nav: 'chats', label: '会话记忆', desc: '历史、摘要、长期事实与人设覆盖', icon: '▣' },
+    { nav: 'people', label: '人员画像', desc: '查看群成员与用户的长期事实', icon: '☷' },
+    { nav: 'config', section: 'multimodal', label: '多模态识别', desc: '让机器人看懂图片 / 听懂语音', icon: '◉' },
+    { nav: 'config', label: '全部配置', desc: 'QQ 接入、命令、管理员与系统项', icon: '⚙' },
+    { nav: 'logs', label: '运行日志', desc: '排查连接、生成与发送问题', icon: '≡' }
+  ];
+
   function layerLabel(layer) {
     return LAYER_LABELS[layer] || String(layer || '未知');
   }
@@ -267,11 +337,26 @@
   var state = {
     booted: false,
     tab: 'overview',
+    configSection: '',
+    navQuery: '',
     pollTimer: 0,
     snapshot: null,
     config: null,
     configLoaded: false,
     configWarnings: [],
+    output: {
+      status: null,
+      store: null,
+      history: [],
+      total: 0,
+      kind: 'image',
+      lastRecords: [],
+      references: [],
+      referenceActive: '',
+      loading: false,
+      error: '',
+      seq: 0
+    },
     stickers: {
       layer: '',
       query: '',
@@ -552,13 +637,14 @@
     var snapshot = state.snapshot;
     if (dataDirEl) {
       if (snapshot) {
-        var version = snapshot.version ? ' · v' + snapshot.version : '';
-        dataDirEl.textContent = '数据目录：' + (snapshot.dataDir || '未知') + version;
+        dataDirEl.textContent = '数据目录：' + (snapshot.dataDir || '未知');
         dataDirEl.title = snapshot.dataDir || '';
       } else {
         dataDirEl.textContent = '数据目录加载中…';
       }
     }
+    var versionEl = $('#sideVersion');
+    if (versionEl) versionEl.textContent = snapshot && snapshot.version ? 'v' + snapshot.version : '';
     var badge = $('#connBadge');
     if (!badge) return;
     var status = snapshot && snapshot.status ? snapshot.status : null;
@@ -569,21 +655,151 @@
     badge.innerHTML = '<span class="dot"></span><span>' + esc(label) + '</span>';
   }
 
-  var TAB_NAMES = ['overview', 'config', 'stickers', 'budget', 'chats', 'people', 'logs'];
+  var TAB_NAMES = ['overview', 'output', 'config', 'stickers', 'budget', 'chats', 'people', 'logs'];
 
-  function activateTab(tab) {
-    if (TAB_NAMES.indexOf(tab) < 0) tab = 'overview';
-    state.tab = tab;
-    $$('.tab').forEach(function (button) {
-      var active = button.dataset.tab === tab;
+  // ---------------------------------------------------------------------------
+  // Grouped sidebar navigation / hash routing
+  // ---------------------------------------------------------------------------
+  function navItemSearchText(item, group) {
+    var section = item.section ? ' config ' + item.section + ' ' : ' ';
+    return String((group ? group.title + ' ' : '') + item.label + ' ' + item.desc + ' ' + item.id + section).toLowerCase();
+  }
+
+  function renderSideNav() {
+    var nav = $('#sideNav');
+    if (!nav) return;
+    nav.innerHTML = NAV_GROUPS.map(function (group) {
+      var items = group.items.map(function (item) {
+        var sectionAttr = item.section ? ' data-config-section="' + esc(item.section) + '"' : '';
+        return (
+          '<button type="button" class="nav-item" data-nav="' + esc(item.id) + '"' + sectionAttr +
+          ' data-search="' + esc(navItemSearchText(item, group)) + '" title="' + esc(item.label + '：' + item.desc) + '">' +
+          '<span class="nav-ico" aria-hidden="true">' + esc(item.icon || '·') + '</span>' +
+          '<span class="nav-text"><span class="nav-label">' + esc(item.label) + '</span>' +
+          '<span class="nav-desc">' + esc(item.desc) + '</span></span>' +
+          '</button>'
+        );
+      }).join('');
+      return (
+        '<div class="nav-group" data-nav-group="' + esc(group.title) + '" data-search="' + esc(group.title.toLowerCase()) + '">' +
+        '<div class="nav-group-title">' + esc(group.title) + '</div>' + items + '</div>'
+      );
+    }).join('');
+    updateNavActive();
+    filterSideNav(state.navQuery);
+  }
+
+  function updateNavActive() {
+    $$('#sideNav .nav-item').forEach(function (button) {
+      var isConfig = button.dataset.nav === 'config';
+      var active = false;
+      if (isConfig) {
+        active = state.tab === 'config' && (button.dataset.configSection || '') === (state.configSection || '');
+      } else {
+        active = button.dataset.nav === state.tab;
+      }
       button.classList.toggle('is-active', active);
-      button.setAttribute('aria-selected', active ? 'true' : 'false');
+      button.setAttribute('aria-current', active ? 'page' : 'false');
     });
+  }
+
+  function filterSideNav(query) {
+    var nav = $('#sideNav');
+    if (!nav) return;
+    var needle = String(query || '').trim().toLowerCase();
+    state.navQuery = needle;
+    var visible = 0;
+    $$('.nav-group', nav).forEach(function (group) {
+      var groupVisible = 0;
+      $$('.nav-item', group).forEach(function (item) {
+        var match = needle === '' || String(item.dataset.search || '').indexOf(needle) >= 0;
+        item.hidden = !match;
+        if (match) groupVisible += 1;
+      });
+      group.hidden = groupVisible === 0;
+      visible += groupVisible;
+    });
+    var empty = $('#navEmpty');
+    if (empty) empty.hidden = visible !== 0;
+  }
+
+  function parseHash() {
+    var raw = String(window.location.hash || '').replace(/^#\/?/, '');
+    if (raw === '') return { tab: 'overview', section: '' };
+    var parts = raw.split('/');
+    var tab = '';
+    var section = '';
+    try {
+      tab = decodeURIComponent(parts[0] || '');
+      section = parts.length > 1 ? decodeURIComponent(parts[1] || '') : '';
+    } catch (err) {
+      tab = 'overview';
+    }
+    if (!PAGE_META[tab]) tab = 'overview';
+    if (tab !== 'config') section = '';
+    return { tab: tab, section: section };
+  }
+
+  function navigate(tab, options) {
+    var opts = options || {};
+    var targetTab = PAGE_META[tab] ? tab : 'overview';
+    var section = targetTab === 'config' && typeof opts.section === 'string' ? opts.section : '';
+    var hash = '#/' + targetTab + (section ? '/' + encodeURIComponent(section) : '');
+    if (window.location.hash !== hash) {
+      window.location.hash = hash;
+      return;
+    }
+    activateTab(targetTab, { section: section });
+  }
+
+  function applyLocation() {
+    var route = parseHash();
+    activateTab(route.tab, { section: route.section });
+  }
+
+  function renderCrumb() {
+    var meta = PAGE_META[state.tab] || PAGE_META.overview;
+    var group = meta.group;
+    var title = meta.title;
+    if (state.tab === 'config' && state.configSection !== '') {
+      var section = findConfigSection(state.configSection);
+      if (section) {
+        group = '配置';
+        title = section.title;
+      }
+    }
+    var groupEl = $('#crumbGroup');
+    var pageEl = $('#crumbPage');
+    if (groupEl) groupEl.textContent = group;
+    if (pageEl) pageEl.textContent = title;
+    try {
+      document.title = title + ' · QQ Bot 控制台';
+    } catch (err) {
+      // ignore document.title failures in exotic embeds
+    }
+  }
+
+  function setSidebarOpen(open) {
+    var sidebar = $('#appSidebar');
+    var backdrop = $('#sideBackdrop');
+    if (sidebar) sidebar.classList.toggle('is-open', open);
+    if (backdrop) backdrop.hidden = !open;
+  }
+
+  function activateTab(tab, options) {
+    if (TAB_NAMES.indexOf(tab) < 0) tab = 'overview';
+    var opts = options || {};
+    var section = tab === 'config' && typeof opts.section === 'string' ? opts.section : '';
+    state.tab = tab;
+    state.configSection = section;
     $$('.panel').forEach(function (panel) {
       panel.classList.toggle('is-active', panel.id === 'panel-' + tab);
     });
+    updateNavActive();
+    renderCrumb();
+    if (window.innerWidth <= 900) setSidebarOpen(false);
     handle(function () {
-      return loadTabNow(tab);
+      return loadTabNow(tab, { force: opts.force === true, section: section });
     });
   }
 
@@ -592,9 +808,12 @@
     switch (tab) {
       case 'overview':
         return refreshSnapshot();
+      case 'output':
+        return loadOutputPage({ force: opts.force === true });
       case 'config':
-        if (state.configLoaded && !opts.force) return Promise.resolve();
-        return loadConfig();
+        return loadConfig({ force: opts.force === true }).then(function () {
+          if (state.tab === 'config' && state.configSection !== '') focusConfigSection(state.configSection);
+        });
       case 'stickers':
         return refreshStickerData();
       case 'budget':
@@ -629,6 +848,21 @@
     );
   }
 
+  function renderQuickNav() {
+    var el = $('#quickNav');
+    if (!el || el.dataset.rendered === '1') return;
+    el.dataset.rendered = '1';
+    el.innerHTML = QUICK_LINKS.map(function (item) {
+      var sectionAttr = item.section ? ' data-config-section="' + esc(item.section) + '"' : '';
+      return (
+        '<button type="button" class="quick-link" data-nav-link="' + esc(item.nav) + '"' + sectionAttr + '>' +
+        '<span class="quick-ico" aria-hidden="true">' + esc(item.icon || '·') + '</span>' +
+        '<span class="quick-text"><span class="quick-title">' + esc(item.label) + '</span>' +
+        '<span class="quick-desc">' + esc(item.desc) + '</span></span></button>'
+      );
+    }).join('');
+  }
+
   function renderOverview() {
     var cardsEl = $('#overviewCards');
     var warningsEl = $('#overviewWarnings');
@@ -638,6 +872,7 @@
       cardsEl.innerHTML = emptyHtml('正在加载…');
       return;
     }
+    renderQuickNav();
     var status = snapshot.status || {};
     var llm = snapshot.llm || {};
     var budget = snapshot.budget || {};
@@ -676,6 +911,52 @@
         rows: [kvHtml('Provider', esc(llm.provider || '—')), kvHtml('模型', esc(llm.model || '—'))]
       })
     );
+
+    var output = snapshot.output || null;
+    var outputStore = snapshot.outputs || {};
+    if (output) {
+      var outputKinds = ['image', 'audio', 'video'].map(function (kind) {
+        var section = output[kind] || {};
+        var ready = output.enabled === true && section.enabled === true && section.configured === true;
+        var label = OUTPUT_KIND_LABELS[kind];
+        var tone = ready ? 'is-ok' : section.enabled ? 'is-warn' : 'is-off';
+        var text = ready ? '已就绪' : section.enabled ? '待补全' : '未启用';
+        return '<span class="status-pill ' + tone + '">' + esc(label) + ' ' + esc(text) + '</span>';
+      }).join(' ');
+      var outputTotal = Number(outputStore.total) || 0;
+      cards.push(
+        cardHtml({
+          title: '多模态输出',
+          badgeHtml: '<span class="badge ' + (output.enabled ? 'badge-ok' : 'badge-muted') + '"><span class="dot"></span>' + (output.enabled ? '已启用' : '未启用') + '</span>',
+          valueHtml: outputTotal + ' <span class="stat-unit">件作品</span>',
+          sub: output.enabled ? '图片 / 语音 / 视频生成接口' : '在「多模态输出」页配置第三方 API',
+          rows: [
+            '<div class="chip-row" style="margin:2px 0 4px">' + outputKinds + '</div>',
+            kvHtml('命令权限', esc(output.commandAccess === 'all' ? '所有用户' : '仅管理员')),
+            kvHtml('发送到 QQ', output.sendToQQ ? '是' : '否'),
+            kvHtml('最近生成', outputStore.latestAt ? fmtAgo(outputStore.latestAt) : '—')
+          ]
+        })
+      );
+    }
+
+    var multimodal = snapshot.multimodal || null;
+    if (multimodal) {
+      var mmReady = multimodal.enabled === true && multimodal.configured === true;
+      cards.push(
+        cardHtml({
+          title: '多模态识别',
+          badgeHtml: '<span class="badge ' + (mmReady ? 'badge-ok' : 'badge-muted') + '"><span class="dot"></span>' + (mmReady ? '已就绪' : '未启用') + '</span>',
+          valueHtml: mmReady ? '可理解入站媒体' : '仅文字占位',
+          sub: '图片 / 语音 / 视频 → 文字描述',
+          rows: [
+            kvHtml('图片', multimodal.image && multimodal.image.enabled ? (multimodal.image.configured ? '已就绪' : '待配置') : '关闭'),
+            kvHtml('语音', multimodal.audio && multimodal.audio.enabled ? (multimodal.audio.configured ? '已就绪' : '待配置') : '关闭'),
+            kvHtml('视频', multimodal.video && multimodal.video.enabled ? (multimodal.video.configured ? '已就绪' : '待配置') : '关闭')
+          ]
+        })
+      );
+    }
 
     var todayLimit = Number(limits.dailyTokens) || 0;
     cards.push(
@@ -806,6 +1087,9 @@
   // ---------------------------------------------------------------------------
   var CONFIG_SCHEMA = [
     {
+      key: 'qq',
+      group: '接入',
+      page: 'config',
       title: 'QQ 接入',
       hint: '凭据来自 QQ 开放平台机器人。保存后插件会自动重启 QQ 连接。',
       fields: [
@@ -828,40 +1112,23 @@
       ]
     },
     {
-      title: 'LLM',
+      key: 'llm',
+      group: '对话',
+      page: 'config',
+      title: 'LLM 模型',
       hint: '使用 DSH 已配置的模型提供方；模型名需与提供方一致。',
       fields: [
-        { path: 'llm.provider', label: 'Provider', type: 'text' },
-        { path: 'llm.model', label: '模型', type: 'text' },
+        { path: 'llm.provider', label: 'Provider', type: 'text', placeholder: 'deepseek-official' },
+        { path: 'llm.model', label: '模型', type: 'text', placeholder: 'deepseek-flash' },
         { path: 'llm.temperature', label: '温度', type: 'number', min: 0, max: 2, step: 0.05 },
         { path: 'llm.maxTokens', label: '最大输出 tokens', type: 'number', min: 64, max: 32768 },
         { path: 'llm.timeoutMs', label: '超时 (ms)', type: 'number', min: 5000, max: 600000 }
       ]
     },
     {
-      title: '多模态识别（可选）',
-      hint: '使用 OpenAI 兼容接口把入站图片、语音、视频转成文字描述，再注入对话上下文。启用总开关并填写 baseUrl、apiKey 与对应模态的模型名后才会调用；各模态可单独开关。',
-      fields: [
-        { path: 'multimodal.enabled', label: '启用多模态识别', type: 'bool', hint: '总开关；baseUrl、apiKey 与对应模态 model 完整时才会调用，否则跳过识别' },
-        { path: 'multimodal.baseUrl', label: 'API Base URL', type: 'text', placeholder: 'https://api.siliconflow.cn/v1', hint: 'OpenAI 兼容 base，例如 https://api.siliconflow.cn/v1 或 https://openrouter.ai/api/v1' },
-        { path: 'multimodal.apiKey', label: 'API Key', type: 'secret', secretOf: 'multimodal' },
-        { path: 'multimodal.image.enabled', label: '识别图片', type: 'bool', hint: '入站图片与表情包会先转成文字描述' },
-        { path: 'multimodal.image.model', label: '图片模型', type: 'text', placeholder: '例如 Qwen/Qwen2.5-VL-7B-Instruct' },
-        { path: 'multimodal.audio.enabled', label: '识别语音', type: 'bool', hint: 'QQ 语音消息（voice_wav_url）转文字或直接理解' },
-        { path: 'multimodal.audio.model', label: '语音模型', type: 'text', placeholder: '例如 FunAudioLLM/SenseVoiceSmall' },
-        { path: 'multimodal.audio.mode', label: '语音模式', type: 'text', placeholder: 'transcribe / chat', hint: 'transcribe：调用 /audio/transcriptions 转写；chat：把音频直接发给支持 input_audio 的模型' },
-        { path: 'multimodal.video.enabled', label: '识别视频', type: 'bool', hint: '视频按 mode 选择抽帧识别或直接传 URL' },
-        { path: 'multimodal.video.model', label: '视频模型', type: 'text', placeholder: '例如 Qwen/Qwen2.5-VL-7B-Instruct' },
-        { path: 'multimodal.video.mode', label: '视频模式', type: 'text', placeholder: 'frames / url', hint: 'frames：需要系统已安装 ffmpeg，抽帧后逐帧识别；url：要求服务商支持 video_url 输入' },
-        { path: 'multimodal.video.frameCount', label: '抽帧数量', type: 'number', min: 1, max: 16, hint: 'frames 模式最多抽取的帧数' },
-        { path: 'multimodal.video.frameIntervalSec', label: '抽帧间隔（秒）', type: 'number', min: 0.1, max: 30, step: 0.1, hint: 'frames 模式每隔多少秒取一帧' },
-        { path: 'multimodal.prompt', label: '识别提示词', type: 'textarea', wide: true, rows: 3 },
-        { path: 'multimodal.timeoutMs', label: '超时 (ms)', type: 'number', min: 1000, max: 600000 },
-        { path: 'multimodal.maxBytes', label: '单文件最大字节', type: 'number', min: 65536, max: 104857600, hint: '超过该大小的媒体会跳过识别（默认 16777216，即 16 MiB）' },
-        { path: 'multimodal.ffmpegPath', label: 'ffmpeg 路径', type: 'text', placeholder: 'ffmpeg', hint: '视频 frames 模式需要系统安装 ffmpeg；可填可执行文件绝对路径，找不到时视频识别会失败' }
-      ]
-    },
-    {
+      key: 'persona',
+      group: '对话',
+      page: 'config',
       title: '人设',
       hint: '全局默认人设；会话级 / 用户级覆盖在「会话」页配置。',
       fields: [
@@ -876,6 +1143,68 @@
       ]
     },
     {
+      key: 'multimodal',
+      group: '多模态',
+      page: 'config',
+      title: '多模态识别（输入）',
+      hint: '使用 OpenAI 兼容接口把入站图片、语音、视频转成文字描述，再注入对话上下文。启用总开关并填写 baseUrl、apiKey 与对应模态的模型名后才会调用；各模态可单独开关。',
+      fields: [
+        { path: 'multimodal.enabled', label: '启用多模态识别', type: 'bool', hint: '总开关；baseUrl、apiKey 与对应模态 model 完整时才会调用，否则跳过识别' },
+        { path: 'multimodal.baseUrl', label: 'API Base URL', type: 'text', placeholder: 'https://api.siliconflow.cn/v1', hint: 'OpenAI 兼容 base，例如 https://api.siliconflow.cn/v1 或 https://openrouter.ai/api/v1' },
+        { path: 'multimodal.apiKey', label: 'API Key', type: 'secret', secretOf: 'multimodal' },
+        { path: 'multimodal.image.enabled', label: '识别图片', type: 'bool', hint: '入站图片与表情包会先转成文字描述' },
+        { path: 'multimodal.image.model', label: '图片模型', type: 'text', placeholder: '例如 Qwen/Qwen2.5-VL-7B-Instruct' },
+        { path: 'multimodal.audio.enabled', label: '识别语音', type: 'bool', hint: 'QQ 语音消息（voice_wav_url）转文字或直接理解' },
+        { path: 'multimodal.audio.model', label: '语音模型', type: 'text', placeholder: '例如 FunAudioLLM/SenseVoiceSmall' },
+        {
+          path: 'multimodal.audio.mode',
+          label: '语音模式',
+          type: 'select',
+          options: [
+            { value: 'transcribe', label: 'transcribe：转写为文字' },
+            { value: 'chat', label: 'chat：直接交给音频理解模型' }
+          ],
+          hint: 'transcribe 调用 /audio/transcriptions；chat 把音频直接发给支持 input_audio 的模型'
+        },
+        { path: 'multimodal.video.enabled', label: '识别视频', type: 'bool', hint: '视频按 mode 选择抽帧识别或直接传 URL' },
+        { path: 'multimodal.video.model', label: '视频模型', type: 'text', placeholder: '例如 Qwen/Qwen2.5-VL-7B-Instruct' },
+        {
+          path: 'multimodal.video.mode',
+          label: '视频模式',
+          type: 'select',
+          options: [
+            { value: 'frames', label: 'frames：ffmpeg 抽帧后逐帧识别' },
+            { value: 'url', label: 'url：直接传视频地址给服务商' }
+          ],
+          hint: 'frames 需要系统已安装 ffmpeg；url 要求服务商支持 video_url 输入'
+        },
+        { path: 'multimodal.video.frameCount', label: '抽帧数量', type: 'number', min: 1, max: 16, hint: 'frames 模式最多抽取的帧数' },
+        { path: 'multimodal.video.frameIntervalSec', label: '抽帧间隔（秒）', type: 'number', min: 0.1, max: 30, step: 0.1, hint: 'frames 模式每隔多少秒取一帧' },
+        { path: 'multimodal.prompt', label: '识别提示词', type: 'textarea', wide: true, rows: 3 },
+        { path: 'multimodal.timeoutMs', label: '超时 (ms)', type: 'number', min: 5000, max: 600000 },
+        { path: 'multimodal.maxBytes', label: '单文件最大字节', type: 'number', min: 65536, max: 104857600, hint: '超过该大小的媒体会跳过识别（默认 16777216，即 16 MiB）' },
+        { path: 'multimodal.ffmpegPath', label: 'ffmpeg 路径', type: 'text', placeholder: 'ffmpeg', hint: '视频 frames 模式需要系统安装 ffmpeg；可填可执行文件绝对路径，找不到时视频识别会失败' }
+      ]
+    },
+    {
+      key: 'memory',
+      group: '对话',
+      page: 'config',
+      title: '记忆与压缩',
+      hint: '达到阈值后自动压缩上下文并抽取长期事实。',
+      fields: [
+        { path: 'memory.maxFacts', label: '每会话最大事实数', type: 'number', min: 0, max: 200 },
+        { path: 'memory.extractEveryUserMessages', label: '每 N 条用户消息抽取事实', type: 'number', min: 1 },
+        { path: 'memory.historyLimit', label: '历史消息保留条数', type: 'number', min: 2, max: 500 },
+        { path: 'memory.compressTriggerTokens', label: '压缩触发 tokens', type: 'number', min: 500 },
+        { path: 'memory.keepRecentMessages', label: '压缩后保留最近消息数', type: 'number', min: 2 },
+        { path: 'memory.summaryMaxChars', label: '摘要最大字数', type: 'number', min: 200 }
+      ]
+    },
+    {
+      key: 'budget',
+      group: '对话',
+      page: 'config',
       title: '预算',
       hint: '限额为 0 表示不限制；单价用于估算费用。',
       fields: [
@@ -892,18 +1221,9 @@
       ]
     },
     {
-      title: '记忆与压缩',
-      hint: '达到阈值后自动压缩上下文并抽取长期事实。',
-      fields: [
-        { path: 'memory.maxFacts', label: '每会话最大事实数', type: 'number', min: 0, max: 200 },
-        { path: 'memory.extractEveryUserMessages', label: '每 N 条用户消息抽取事实', type: 'number', min: 1 },
-        { path: 'memory.historyLimit', label: '历史消息保留条数', type: 'number', min: 2, max: 500 },
-        { path: 'memory.compressTriggerTokens', label: '压缩触发 tokens', type: 'number', min: 500 },
-        { path: 'memory.keepRecentMessages', label: '压缩后保留最近消息数', type: 'number', min: 2 },
-        { path: 'memory.summaryMaxChars', label: '摘要最大字数', type: 'number', min: 200 }
-      ]
-    },
-    {
+      key: 'stickers',
+      group: '内容',
+      page: 'config',
       title: '表情包',
       hint: '正式库用于聊天挑选；候选库可手动升级。',
       fields: [
@@ -916,6 +1236,9 @@
       ]
     },
     {
+      key: 'commands',
+      group: '系统',
+      page: 'config',
       title: '命令与管理员',
       hint: '命令前缀默认 #，同时兼容 /；管理员可使用管理命令。',
       fields: [
@@ -929,13 +1252,253 @@
       ]
     },
     {
-      title: '日志',
+      key: 'logging',
+      group: '系统',
+      page: 'config',
+      title: '系统与日志',
       fields: [
         { path: 'logging.maxLines', label: '日志保留行数', type: 'number', min: 50, max: 5000 },
         { path: 'logging.debug', label: '调试日志', type: 'bool' }
       ]
+    },
+
+    /* ---- multimodal output (rendered on the dedicated output page) ---- */
+    {
+      key: 'output-general',
+      group: '输出',
+      page: 'output',
+      title: '输出总开关',
+      hint: '控制多模态输出是否启用、谁能用聊天命令生成、生成后是否直接发到 QQ。',
+      fields: [
+        { path: 'output.enabled', label: '启用多模态输出', type: 'bool', hint: '总开关；关闭后聊天命令与模型指令都不会生成内容' },
+        {
+          path: 'output.commandAccess',
+          label: '聊天命令权限',
+          type: 'select',
+          options: [
+            { value: 'admin', label: '仅管理员（推荐）' },
+            { value: 'all', label: '所有用户' }
+          ],
+          hint: '生成会调用第三方接口并产生费用；开放给所有用户前请确认预算与风控'
+        },
+        { path: 'output.sendToQQ', label: '生成后发送到 QQ', type: 'bool', hint: '关闭时只保存到作品库，不占用 QQ 富媒体上传额度' },
+        { path: 'output.allowModelDirectives', label: '允许模型主动生成', type: 'bool', hint: '开启后模型可在回复里使用 [[image: ...]] / [[voice: ...]] / [[video: ...]] 指令；每次最多一个' },
+        { path: 'output.promptPrefix', label: '统一提示词前缀', type: 'textarea', wide: true, rows: 2, hint: '附加在图片/视频提示词前面；语音输出不追加' },
+        { path: 'output.timeoutMs', label: '单次请求超时 (ms)', type: 'number', min: 5000, max: 600000 },
+        { path: 'output.maxBytes', label: '单个结果最大字节', type: 'number', min: 65536, max: 209715200, hint: '默认 33554432（32 MiB）；超过的结果不会保存' },
+        { path: 'output.maxItems', label: '作品库最多保留数量', type: 'number', min: 0, max: 2000, hint: '0 表示不按数量清理' },
+        { path: 'output.retentionDays', label: '作品保留天数', type: 'number', min: 0, max: 3650, hint: '0 表示不按时间清理' }
+      ]
+    },
+    {
+      key: 'output-image',
+      group: '输出',
+      page: 'output',
+      testKind: 'image',
+      title: '图片输出',
+      hint: 'OpenAI 兼容 /images/generations。硅基流动等聚合服务可把参数名改为 image_size / batch_size。',
+      fields: [
+        { path: 'output.image.enabled', label: '启用图片输出', type: 'bool' },
+        { path: 'output.image.baseUrl', label: 'API Base URL', type: 'text', placeholder: 'https://api.siliconflow.cn/v1', hint: '填到 /v1 层级，例如 https://api.example.com/v1；只填域名时会自动补 /v1 并显示实际请求地址' },
+        { path: 'output.image.apiKey', label: 'API Key', type: 'secret', secretOf: 'output.image' },
+        { path: 'output.image.model', label: '模型', type: 'text', placeholder: '例如 Kwai-Kolors/Kolors / gpt-image-1' },
+        { path: 'output.image.path', label: '接口路径', type: 'text', placeholder: '/images/generations' },
+        { path: 'output.image.size', label: '图片尺寸', type: 'text', placeholder: '1024x1024', hint: '按服务商支持的尺寸填写，例如 1024x1024 / 768x1024' },
+        {
+          path: 'output.image.sizeField',
+          label: '尺寸参数名',
+          type: 'select',
+          options: [
+            { value: 'size', label: 'size（OpenAI）' },
+            { value: 'image_size', label: 'image_size（硅基流动等）' },
+            { value: 'none', label: '不发送尺寸' }
+          ]
+        },
+        { path: 'output.image.count', label: '每次生成张数', type: 'number', min: 1, max: 4, hint: '为 1 时不会发送 n / batch_size 参数，避免部分服务商把未知参数当作错误' },
+        {
+          path: 'output.image.countField',
+          label: '数量参数名',
+          type: 'select',
+          options: [
+            { value: 'n', label: 'n（OpenAI）' },
+            { value: 'batch_size', label: 'batch_size（硅基流动等）' },
+            { value: 'none', label: '不发送数量' }
+          ]
+        },
+        {
+          path: 'output.image.responseFormat',
+          label: '返回格式',
+          type: 'select',
+          options: [
+            { value: 'b64_json', label: 'b64_json（直接返回图片数据）' },
+            { value: 'url', label: 'url（返回临时下载地址）' },
+            { value: '', label: '不指定（自动解析）' }
+          ],
+          hint: '不指定时只依赖服务商默认值；两种返回都能自动解析'
+        },
+        { path: 'output.image.quality', label: '质量参数（可选）', type: 'text', placeholder: '例如 high / standard' },
+        { path: 'output.image.style', label: '风格参数（可选）', type: 'text', placeholder: '例如 vivid / natural' },
+        { path: 'output.image.extraBody', label: '附加请求体 JSON', type: 'textarea', wide: true, rows: 3, hint: '会合并进请求体，例如 {"negative_prompt":"lowres","num_inference_steps":25}' }
+      ]
+    },
+    {
+      key: 'output-image-reference',
+      group: '输出',
+      page: 'output',
+      referencePanel: true,
+      title: '角色形象参考',
+      hint: '上传一张蓝色鲸鱼娘形象图并设为当前；当提示词提到角色名 / 触发关键词时，这张图会作为参考图（输入 tokens）发给图片模型。',
+      fields: [
+        { path: 'output.image.reference.enabled', label: '启用角色形象参考', type: 'bool', hint: '启用后仍需选择一张「当前参考图」才会真正带入图片请求' },
+        {
+          path: 'output.image.reference.trigger',
+          label: '触发方式',
+          type: 'select',
+          options: [
+            { value: 'auto', label: '自动：提示词命中角色名 / 关键词时使用' },
+            { value: 'always', label: '始终：每次生成图片都使用参考图' }
+          ]
+        },
+        { path: 'output.image.reference.keywords', label: '触发关键词', type: 'text', wide: true, hint: '逗号分隔；机器人名字会自动加入，例如：鲸鱼娘,小蓝,蓝色鲸鱼娘,你自己,qq机器人' },
+        {
+          path: 'output.image.reference.requestMode',
+          label: '参考图请求方式',
+          type: 'select',
+          options: [
+            { value: 'edits', label: 'OpenAI /images/edits（multipart 上传图片）' },
+            { value: 'generations', label: '在 /images/generations 请求体里带图片字段' }
+          ],
+          hint: '服务商支持 image-to-image / 图片编辑时选 edits；只接受 JSON 图片字段时选 generations'
+        },
+        { path: 'output.image.reference.path', label: '参考图接口路径', type: 'text', placeholder: '/images/edits', showIf: { path: 'output.image.reference.requestMode', values: ['edits'] }, hint: 'OpenAI 兼容默认 /images/edits；Base URL 无路径时会自动补 /v1' },
+        { path: 'output.image.reference.field', label: '图片字段名', type: 'text', placeholder: 'image', hint: 'edits 模式为 multipart 文件字段名；generations 模式为 JSON 字段名' },
+        {
+          path: 'output.image.reference.format',
+          label: '图片编码',
+          type: 'select',
+          options: [
+            { value: 'data_url', label: 'data URL（data:image/...;base64,...）' },
+            { value: 'base64', label: '纯 base64' }
+          ],
+          showIf: { path: 'output.image.reference.requestMode', values: ['generations'] }
+        },
+        { path: 'output.image.reference.promptPrefix', label: '参考图提示词前缀', type: 'textarea', wide: true, rows: 3, hint: '使用参考图时自动加在提示词前，用于强调保持角色形象一致' },
+        { path: 'output.image.reference.fallbackToText', label: '参考图请求失败时回退纯文生图', type: 'bool', hint: '关闭后参考图调用失败会直接报错，便于发现接口不支持' },
+        { path: 'output.image.reference.maxBytes', label: '参考图最大字节', type: 'number', min: 65536, max: 52428800 },
+        { path: 'output.image.reference.maxItems', label: '最多保留参考图数量', type: 'number', min: 1, max: 100 }
+      ]
+    },
+    {
+      key: 'output-audio',
+      group: '输出',
+      page: 'output',
+      testKind: 'audio',
+      title: '语音输出',
+      hint: 'OpenAI 兼容 /audio/speech，返回二进制音频；也兼容返回 base64/URL 的 JSON 响应。',
+      fields: [
+        { path: 'output.audio.enabled', label: '启用语音输出', type: 'bool' },
+        { path: 'output.audio.baseUrl', label: 'API Base URL', type: 'text', placeholder: 'https://api.siliconflow.cn/v1', hint: '填到 /v1 层级；只填域名时会自动补 /v1' },
+        { path: 'output.audio.apiKey', label: 'API Key', type: 'secret', secretOf: 'output.audio' },
+        { path: 'output.audio.model', label: '模型', type: 'text', placeholder: '例如 FunAudioLLM/CosyVoice2-0.5B' },
+        { path: 'output.audio.path', label: '接口路径', type: 'text', placeholder: '/audio/speech' },
+        { path: 'output.audio.voice', label: '音色', type: 'text', placeholder: 'alloy' },
+        {
+          path: 'output.audio.format',
+          label: '音频格式',
+          type: 'select',
+          options: [
+            { value: 'mp3', label: 'mp3' },
+            { value: 'wav', label: 'wav' },
+            { value: 'ogg', label: 'ogg' },
+            { value: 'opus', label: 'opus' }
+          ],
+          hint: 'QQ 语音条支持 mp3 / wav / ogg；其他格式会保存到作品库但不会直接发送'
+        },
+        { path: 'output.audio.speed', label: '语速', type: 'number', min: 0.25, max: 4, step: 0.05 },
+        { path: 'output.audio.extraBody', label: '附加请求体 JSON', type: 'textarea', wide: true, rows: 3, hint: '会合并进请求体，例如 {"language":"zh"}' }
+      ]
+    },
+    {
+      key: 'output-video',
+      group: '输出',
+      page: 'output',
+      testKind: 'video',
+      title: '视频输出',
+      hint: '视频接口都是异步任务：先提交，再轮询状态，最后下载结果。支持硅基流动、OpenAI Videos 与自定义异步协议。',
+      fields: [
+        { path: 'output.video.enabled', label: '启用视频输出', type: 'bool' },
+        {
+          path: 'output.video.preset',
+          label: '接口协议',
+          type: 'select',
+          options: [
+            { value: 'siliconflow', label: '硅基流动 /video/submit + /video/status' },
+            { value: 'openai', label: 'OpenAI Videos /videos + /videos/{id}' },
+            { value: 'custom', label: '自定义异步任务接口' }
+          ]
+        },
+        { path: 'output.video.baseUrl', label: 'API Base URL', type: 'text', placeholder: 'https://api.siliconflow.cn/v1', hint: '填到 /v1 层级；只填域名时会自动补 /v1' },
+        { path: 'output.video.apiKey', label: 'API Key', type: 'secret', secretOf: 'output.video' },
+        { path: 'output.video.model', label: '模型', type: 'text', placeholder: '例如 Wan-AI/Wan2.2-T2V-A14B' },
+        { path: 'output.video.size', label: '视频尺寸', type: 'text', placeholder: '1280x720' },
+        {
+          path: 'output.video.sizeField',
+          label: '尺寸参数名',
+          type: 'select',
+          options: [
+            { value: 'image_size', label: 'image_size（硅基流动 / 自定义）' },
+            { value: 'size', label: 'size（OpenAI）' }
+          ],
+          showIf: { path: 'output.video.preset', values: ['siliconflow', 'custom'] }
+        },
+        { path: 'output.video.duration', label: '时长（秒）', type: 'number', min: 1, max: 60, hint: 'OpenAI Videos 会作为 seconds 发送；其他服务商可用附加 JSON 指定' },
+        { path: 'output.video.negativePrompt', label: '负向提示词', type: 'textarea', rows: 2, hint: '硅基流动会作为 negative_prompt 发送' },
+        { path: 'output.video.createPath', label: '提交任务路径', type: 'text', placeholder: '/video/submit', showIf: { path: 'output.video.preset', values: ['custom'] } },
+        { path: 'output.video.queryPath', label: '查询任务路径', type: 'text', placeholder: '/video/status 或 /tasks/{id}', showIf: { path: 'output.video.preset', values: ['custom'] }, hint: '支持 {id} 占位符；留空则原样请求' },
+        {
+          path: 'output.video.queryMethod',
+          label: '查询方法',
+          type: 'select',
+          options: [
+            { value: 'POST', label: 'POST' },
+            { value: 'GET', label: 'GET' }
+          ],
+          showIf: { path: 'output.video.preset', values: ['custom'] }
+        },
+        {
+          path: 'output.video.requestFormat',
+          label: '提交格式',
+          type: 'select',
+          options: [
+            { value: 'json', label: 'JSON' },
+            { value: 'multipart', label: 'multipart/form-data' }
+          ],
+          showIf: { path: 'output.video.preset', values: ['openai', 'custom'] }
+        },
+        { path: 'output.video.idField', label: '任务 ID 字段', type: 'text', placeholder: 'requestId', showIf: { path: 'output.video.preset', values: ['custom'] } },
+        { path: 'output.video.statusField', label: '状态字段', type: 'text', placeholder: 'status', showIf: { path: 'output.video.preset', values: ['custom'] } },
+        { path: 'output.video.resultField', label: '结果 URL 字段', type: 'text', placeholder: 'results.videos.0.url', showIf: { path: 'output.video.preset', values: ['custom'] }, hint: '支持点路径与 [0] 下标' },
+        { path: 'output.video.successValues', label: '成功状态值', type: 'text', showIf: { path: 'output.video.preset', values: ['custom'] }, hint: '逗号分隔，不区分大小写' },
+        { path: 'output.video.failureValues', label: '失败状态值', type: 'text', showIf: { path: 'output.video.preset', values: ['custom'] }, hint: '逗号分隔，不区分大小写' },
+        { path: 'output.video.pollIntervalMs', label: '轮询间隔 (ms)', type: 'number', min: 500, max: 60000 },
+        { path: 'output.video.maxWaitMs', label: '最长等待 (ms)', type: 'number', min: 10000, max: 1800000 },
+        { path: 'output.video.extraBody', label: '附加请求体 JSON', type: 'textarea', wide: true, rows: 3, hint: '会合并进提交请求体，例如 {"seed":42}' }
+      ]
     }
   ];
+
+  function findConfigSection(key) {
+    for (var i = 0; i < CONFIG_SCHEMA.length; i += 1) {
+      if (CONFIG_SCHEMA[i].key === key) return CONFIG_SCHEMA[i];
+    }
+    return null;
+  }
+
+  function configSections(page) {
+    return CONFIG_SCHEMA.filter(function (section) {
+      return (section.page || 'config') === page;
+    });
+  }
 
   function renderConfigWarnings(target, warnings, emptyText) {
     if (!target) return;
@@ -945,13 +1508,32 @@
       : '<li class="muted">' + esc(emptyText || '无配置警告') + '</li>';
   }
 
+  function fieldSearchText(field) {
+    return String(field.path + ' ' + field.label + ' ' + (field.hint || '') + ' ' + (field.placeholder || '')).toLowerCase();
+  }
+
+  function fieldShowIfAttributes(field, config) {
+    if (!field.showIf || typeof field.showIf.path !== 'string') return { attrs: '', hidden: false };
+    var values = Array.isArray(field.showIf.values) ? field.showIf.values : [];
+    var current = getPath(config, field.showIf.path);
+    var visible = values.indexOf(String(current === undefined || current === null ? '' : current)) >= 0;
+    return {
+      attrs:
+        ' data-show-if-path="' + esc(field.showIf.path) + '" data-show-if-values="' + esc(JSON.stringify(values)) + '"',
+      hidden: !visible
+    };
+  }
+
   function renderConfigField(field, config) {
     var value = getPath(config, field.path);
     var path = esc(field.path);
     var label = esc(field.label);
+    var conditional = fieldShowIfAttributes(field, config);
+    var search = ' data-search="' + esc(fieldSearchText(field)) + '"';
+    var hiddenAttr = conditional.hidden ? ' hidden' : '';
     if (field.type === 'bool') {
       return (
-        '<label class="check-field">' +
+        '<label class="check-field"' + search + conditional.attrs + hiddenAttr + '>' +
         '<input type="checkbox" data-path="' + path + '" data-type="bool"' + (value ? ' checked' : '') + ' />' +
         '<span class="check-text">' + label + '</span>' +
         (field.hint ? '<span class="field-hint">' + esc(field.hint) + '</span>' : '') +
@@ -975,12 +1557,22 @@
       var shardText = Array.isArray(value) ? value.join(',') : '';
       control = '<input type="text" data-path="' + path + '" data-type="shard" value="' + esc(shardText) + '" placeholder="0,1" />';
     } else if (field.type === 'secret') {
-      var secretRoot = field.secretOf || 'qq';
-      var secretConfig = config && config[secretRoot] && typeof config[secretRoot] === 'object' ? config[secretRoot] : {};
+      var secretConfig = field.secretOf ? getPath(config, field.secretOf) : config && config.qq;
+      if (secretConfig === null || typeof secretConfig !== 'object') secretConfig = {};
       var masked = secretConfig.appSecretMasked || secretConfig.apiKeyMasked || '';
       var hasSecret = !!(secretConfig.hasSecret || secretConfig.hasApiKey);
       var placeholder = hasSecret ? '已保存（' + masked + '），留空不修改' : '尚未设置';
       control = '<input type="password" autocomplete="new-password" data-path="' + path + '" data-type="secret" value="" placeholder="' + esc(placeholder) + '" />';
+    } else if (field.type === 'select') {
+      var options = Array.isArray(field.options) ? field.options : [];
+      var current = value === null || value === undefined ? '' : String(value);
+      var found = options.some(function (option) { return String(option.value) === current; });
+      var optionHtml = options.map(function (option) {
+        var optionValue = String(option.value);
+        return '<option value="' + esc(optionValue) + '"' + (optionValue === current ? ' selected' : '') + '>' + esc(option.label || option.value) + '</option>';
+      }).join('');
+      if (!found && current !== '') optionHtml += '<option value="' + esc(current) + '" selected>当前值：' + esc(current) + '</option>';
+      control = '<select data-path="' + path + '" data-type="text">' + optionHtml + '</select>';
     } else {
       control = '<input type="text" data-path="' + path + '" data-type="text" value="' + esc(value === null || value === undefined ? '' : value) + '" placeholder="' + esc(field.placeholder || '') + '" />';
     }
@@ -991,29 +1583,182 @@
       return '<span class="field-hint">' + esc(hint) + '</span>';
     }).join('');
     return (
-      '<label class="field' + (field.wide ? ' field-wide' : '') + '">' +
+      '<label class="field' + (field.wide ? ' field-wide' : '') + '"' + search + conditional.attrs + hiddenAttr + '>' +
       '<span class="field-label">' + label + '</span>' + control + hintHtml +
       '</label>'
     );
   }
 
-  function renderConfigForm() {
-    var form = $('#configForm');
-    if (!form) return;
-    var config = state.config || {};
-    form.innerHTML = CONFIG_SCHEMA.map(function (section) {
+  function renderConfigSections(sections, config) {
+    return sections.map(function (section) {
       var fields = section.fields.map(function (field) {
         return renderConfigField(field, config);
       }).join('');
       return (
-        '<fieldset class="form-section"><legend class="form-section-title">' + esc(section.title) + '</legend>' +
+        '<fieldset class="form-section" id="cfg-' + esc(section.key) + '" data-section="' + esc(section.key) + '">' +
+        '<legend class="form-section-title">' + esc(section.title) + '</legend>' +
         (section.hint ? '<p class="section-hint">' + esc(section.hint) + '</p>' : '') +
         '<div class="form-grid">' + fields + '</div></fieldset>'
       );
     }).join('');
   }
 
-  async function loadConfig() {
+  function renderConfigNav() {
+    var nav = $('#configNav');
+    if (!nav) return;
+    var groups = [];
+    var byGroup = Object.create(null);
+    configSections('config').forEach(function (section) {
+      var group = section.group || '其它';
+      if (byGroup[group] === undefined) {
+        byGroup[group] = [];
+        groups.push(group);
+      }
+      byGroup[group].push(section);
+    });
+    nav.innerHTML = groups.map(function (group) {
+      var items = byGroup[group].map(function (section) {
+        return (
+          '<button type="button" class="config-nav-item" data-config-jump="' + esc(section.key) + '" title="跳到「' + esc(section.title) + '」">' +
+          '<span>' + esc(section.title) + '</span><span class="config-nav-badge">' + section.fields.length + '</span></button>'
+        );
+      }).join('');
+      return '<div class="config-nav-group"><div class="config-nav-title">' + esc(group) + '</div>' + items + '</div>';
+    }).join('');
+    updateConfigNavActive(state.configSection);
+  }
+
+  function updateConfigNavActive(key) {
+    $$('#configNav [data-config-jump]').forEach(function (button) {
+      button.classList.toggle('is-active', button.dataset.configJump === key);
+    });
+  }
+
+  function focusConfigSection(key) {
+    if (!key) return;
+    var section = findConfigSection(key);
+    if (!section) return;
+    var target = document.getElementById('cfg-' + key);
+    if (!target) return;
+    try {
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch (err) {
+      target.scrollIntoView();
+    }
+    target.classList.add('is-target');
+    window.setTimeout(function () {
+      target.classList.remove('is-target');
+    }, 1800);
+    updateConfigNavActive(key);
+  }
+
+  function renderConfigForm() {
+    var form = $('#configForm');
+    if (!form) return;
+    var config = state.config || {};
+    form.innerHTML = renderConfigSections(configSections('config'), config);
+    renderConfigNav();
+    refreshConditionalFields(form);
+  }
+
+  function renderOutputConfig() {
+    var root = $('#outputConfig');
+    if (!root) return;
+    var config = state.config || {};
+    root.innerHTML = configSections('output').map(function (section) {
+      var fields = section.fields.map(function (field) {
+        return renderConfigField(field, config);
+      }).join('');
+      var actions = '';
+      if (section.testKind) {
+        actions =
+          '<div class="output-config-actions">' +
+          '<button type="button" class="btn btn-sm" data-output-test="' + esc(section.testKind) + '">检测接口</button>' +
+          '<span class="output-test-result" data-output-test-result="' + esc(section.testKind) + '"></span>' +
+          '</div>';
+      }
+      return (
+        '<section class="output-config-card" id="out-' + esc(section.key) + '" data-output-section="' + esc(section.key) + '">' +
+        '<header class="output-config-head"><div><h4>' + esc(section.title) + '</h4>' +
+        (section.hint ? '<p>' + esc(section.hint) + '</p>' : '') + '</div>' + actions + '</header>' +
+        (section.referencePanel ? '<div id="outputReferencePanel" class="reference-panel"></div>' : '') +
+        '<div class="form-grid">' + fields + '</div></section>'
+      );
+    }).join('');
+    refreshConditionalFields(root);
+    renderOutputReferencePanel();
+  }
+
+  function isConditionVisible(node, scope) {
+    if (!node.hasAttribute('data-show-if-path')) return true;
+    var sourcePath = node.dataset.showIfPath;
+    var candidates = $$('[data-path]', scope);
+    var source = null;
+    for (var i = 0; i < candidates.length; i += 1) {
+      if (candidates[i].dataset.path === sourcePath) {
+        source = candidates[i];
+        break;
+      }
+    }
+    if (source === null) return true;
+    var allowed = [];
+    try {
+      allowed = JSON.parse(node.dataset.showIfValues || '[]');
+    } catch (err) {
+      allowed = [];
+    }
+    var current = source.type === 'checkbox' ? (source.checked ? 'true' : 'false') : String(source.value || '');
+    return allowed.indexOf(current) >= 0;
+  }
+
+  function refreshConditionalFields(root) {
+    var scope = root || document;
+    $$('[data-show-if-path]', scope).forEach(function (node) {
+      var search = String(node.dataset.search || '');
+      var hiddenBySearch = node.dataset.searchHidden === '1';
+      node.hidden = !isConditionVisible(node, scope) || (hiddenBySearch && search !== '');
+    });
+  }
+
+  function filterConfigFields(query) {
+    var form = $('#configForm');
+    if (!form) return;
+    var needle = String(query || '').trim().toLowerCase();
+    var visibleFields = 0;
+    var visibleSections = 0;
+    $$('.form-section', form).forEach(function (section) {
+      var sectionVisible = 0;
+      $$('.field, .check-field', section).forEach(function (field) {
+        var conditionOk = isConditionVisible(field, form);
+        var match = conditionOk && (needle === '' || String(field.dataset.search || '').indexOf(needle) >= 0);
+        field.dataset.searchHidden = !match ? '1' : '0';
+        field.hidden = !match;
+        if (match) sectionVisible += 1;
+      });
+      section.hidden = sectionVisible === 0;
+      if (sectionVisible > 0) {
+        visibleSections += 1;
+        visibleFields += sectionVisible;
+      }
+    });
+    var countEl = $('#configSearchCount');
+    if (countEl) countEl.textContent = needle === '' ? '' : '匹配 ' + visibleFields + ' 项';
+    $$('#configNav [data-config-jump]').forEach(function (button) {
+      var section = document.getElementById('cfg-' + button.dataset.configJump);
+      button.classList.toggle('is-muted', !!(section && section.hidden));
+    });
+    return { fields: visibleFields, sections: visibleSections };
+  }
+
+  async function loadConfig(options) {
+    var opts = options || {};
+    if (state.configLoaded && opts.force !== true) {
+      renderConfigForm();
+      renderConfigWarnings($('#configWarnings'), state.configWarnings);
+      renderOutputConfig();
+      renderOutputWarnings();
+      return state.config;
+    }
     var result = await api('config.get');
     var config = result && result.config && typeof result.config === 'object' ? result.config : {};
     state.config = config;
@@ -1021,13 +1766,15 @@
     state.configLoaded = true;
     renderConfigForm();
     renderConfigWarnings($('#configWarnings'), state.configWarnings);
+    renderOutputConfig();
+    renderOutputWarnings();
+    return config;
   }
 
-  function collectConfigPatch() {
-    var form = $('#configForm');
-    if (!form) return {};
+  function collectConfigPatchFrom(root) {
+    if (!root) return {};
     var patch = {};
-    var inputs = $$('[data-path]', form);
+    var inputs = $$('[data-path]', root);
     for (var i = 0; i < inputs.length; i += 1) {
       var input = inputs[i];
       var path = input.dataset.path;
@@ -1063,20 +1810,579 @@
     return patch;
   }
 
+  function collectConfigPatch() {
+    return collectConfigPatchFrom($('#configForm'));
+  }
+
+  function renderOutputWarnings() {
+    var target = $('#outputWarnings');
+    if (!target) return;
+    var warnings = (Array.isArray(state.configWarnings) ? state.configWarnings : []).filter(function (warning) {
+      return String(warning).indexOf('output') >= 0 || String(warning).indexOf('多模态输出') >= 0;
+    });
+    renderConfigWarnings(target, warnings, '多模态输出没有配置警告');
+  }
+
   function saveConfig() {
     return withLoading($('#btnConfigSave'), async function () {
       var patch = collectConfigPatch();
       var result = await api('config.save', { patch: patch });
       if (result && result.config && typeof result.config === 'object') state.config = result.config;
       state.configLoaded = true;
-      renderConfigForm();
       state.configWarnings = result && Array.isArray(result.warnings) ? result.warnings : [];
+      renderConfigForm();
+      renderOutputConfig();
       renderConfigWarnings($('#configWarnings'), state.configWarnings);
+      renderOutputWarnings();
       toast('配置已保存，QQ 连接将按新配置重启', 'success');
       window.setTimeout(function () {
         refreshSnapshot({ silent: true }).catch(function () {});
       }, 1200);
     }, '保存中…');
+  }
+
+  // ---------------------------------------------------------------------------
+  // 多模态输出
+  // ---------------------------------------------------------------------------
+  function outputMediaUrl(id) {
+    return OUTPUT_MEDIA_ROOT + '/' + encodeURIComponent(String(id === null || id === undefined ? '' : id));
+  }
+
+  function referenceMediaUrl(id) {
+    return BASE_PATH + '/media/reference/' + encodeURIComponent(String(id === null || id === undefined ? '' : id));
+  }
+
+  function activeReference() {
+    var items = Array.isArray(state.output.references) ? state.output.references : [];
+    for (var i = 0; i < items.length; i += 1) {
+      if (items[i].id === state.output.referenceActive) return items[i];
+    }
+    return null;
+  }
+
+  function renderOutputReferencePanel() {
+    var panel = $('#outputReferencePanel');
+    if (!panel) return;
+    var items = Array.isArray(state.output.references) ? state.output.references : [];
+    var active = activeReference();
+    var current = active
+      ? '<div class="reference-current">' +
+          '<img src="' + esc(referenceMediaUrl(active.id)) + '" alt="' + esc(active.originalName || '角色参考图') + '" />' +
+          '<div class="reference-current-body">' +
+            '<div class="reference-current-name">' + esc(active.originalName || '参考图') + '</div>' +
+            '<div class="muted small">' + fmtBytes(active.size) + ' · ' + fmtTime(active.createdAt) + '</div>' +
+            '<div class="muted small mono">' + esc(active.id) + '</div>' +
+            '<div class="row-actions"><span class="status-pill is-ok">当前参考图</span>' +
+            '<button type="button" class="btn btn-sm" data-reference-clear="1">取消当前参考</button></div>' +
+          '</div>' +
+        '</div>'
+      : '<div class="empty reference-empty">还没有选择参考图。上传一张蓝色鲸鱼娘形象图后，点击「设为当前」。</div>';
+    var list = items.length
+      ? '<div class="reference-gallery">' +
+          items.map(function (item) {
+            var isActive = item.id === state.output.referenceActive;
+            return (
+              '<figure class="reference-card' + (isActive ? ' is-active' : '') + '">' +
+              '<img src="' + esc(referenceMediaUrl(item.id)) + '" alt="' + esc(item.originalName || item.id) + '" loading="lazy" />' +
+              '<figcaption>' +
+              '<span class="reference-name">' + esc(item.originalName || item.id) + '</span>' +
+              '<span class="muted small">' + fmtBytes(item.size) + ' · ' + fmtAgo(item.createdAt) + '</span>' +
+              '</figcaption>' +
+              '<div class="reference-actions">' +
+              (isActive
+                ? '<span class="status-pill is-ok">当前</span>'
+                : '<button type="button" class="btn btn-sm" data-reference-use="' + esc(item.id) + '">设为当前</button>') +
+              '<button type="button" class="btn btn-sm btn-danger-ghost" data-reference-delete="' + esc(item.id) + '">删除</button>' +
+              '</div>' +
+              '</figure>'
+            );
+          }).join('') +
+        '</div>'
+      : '';
+    panel.innerHTML =
+      '<div class="reference-head">' +
+        '<div><strong>角色参考图</strong><p class="muted small">上传后作为图片生成输入；只有提示词命中角色名 / 关键词（或触发方式为「始终」）时才会使用。</p></div>' +
+        '<div class="reference-actions">' +
+          '<button type="button" class="btn btn-sm" data-reference-upload="1">上传参考图</button>' +
+          '<input id="referenceFileInput" class="hidden-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" />' +
+        '</div>' +
+      '</div>' +
+      current + list;
+  }
+
+  async function loadOutputReferences() {
+    var result = await api('output.reference.list');
+    state.output.references = result && Array.isArray(result.items) ? result.items : [];
+    state.output.referenceActive = result && typeof result.active === 'string' ? result.active : '';
+    renderOutputReferencePanel();
+  }
+
+  async function uploadOutputReference(file) {
+    if (!file) return;
+    var data = await fileToBase64(file);
+    if (!data) throw new Error('读取参考图片失败');
+    var result = await api('output.reference.upload', {
+      name: file.name,
+      mime: file.type || '',
+      dataBase64: data
+    });
+    var item = result && result.item;
+    if (item && item.id) {
+      await activateOutputReference(item.id, true);
+      toast('参考图已上传并设为当前', 'success');
+    }
+    await loadOutputReferences();
+    await loadOutputLibrary();
+  }
+
+  async function activateOutputReference(id, enable) {
+    var args = { id: id };
+    if (enable === true) args.enabled = true;
+    var result = await api('output.reference.activate', args);
+    if (result && result.config) state.config = result.config;
+    state.output.referenceActive = id;
+    state.configWarnings = result && Array.isArray(result.warnings) ? result.warnings : state.configWarnings;
+    var enabledInput = $('[data-path="output.image.reference.enabled"]');
+    if (enable === true && enabledInput) enabledInput.checked = true;
+    renderOutputWarnings();
+    await loadOutputReferences();
+    await loadOutputLibrary();
+  }
+
+  async function clearOutputReference() {
+    var result = await api('config.save', { patch: { output: { image: { reference: { id: '' } } } } });
+    if (result && result.config) state.config = result.config;
+    state.output.referenceActive = '';
+    if (result && Array.isArray(result.warnings)) state.configWarnings = result.warnings;
+    renderOutputWarnings();
+    await loadOutputReferences();
+    await loadOutputLibrary();
+    toast('已取消当前参考图', 'success');
+  }
+
+  async function deleteOutputReference(id) {
+    var confirmed = await confirmModal({
+      title: '删除参考图',
+      message: '确定删除这张角色参考图吗？删除后不可恢复。',
+      confirmLabel: '删除',
+      danger: true
+    });
+    if (!confirmed) return;
+    var result = await api('output.reference.delete', { id: id });
+    state.output.referenceActive = result && typeof result.active === 'string' ? result.active : '';
+    await loadOutputReferences();
+    await loadOutputLibrary();
+    toast('参考图已删除', 'success');
+  }
+
+  function outputRecordById(id) {
+    var records = state.output.history || [];
+    for (var i = 0; i < records.length; i += 1) {
+      if (records[i].id === id) return records[i];
+    }
+    var last = state.output.lastRecords || [];
+    for (var j = 0; j < last.length; j += 1) {
+      if (last[j].id === id) return last[j];
+    }
+    return null;
+  }
+
+  function outputKindBadge(kind) {
+    var key = OUTPUT_KIND_LABELS[kind] ? kind : 'image';
+    return '<span class="output-kind-badge">' + esc(OUTPUT_KIND_ICONS[key] || '') + ' ' + esc(OUTPUT_KIND_LABELS[key]) + '</span>';
+  }
+
+  function outputRecordHtml(record) {
+    if (!record || !record.id) return '';
+    var kind = record.kind || 'image';
+    var url = outputMediaUrl(record.id);
+    var media = '';
+    if (kind === 'image') {
+      media = '<button type="button" class="output-item-media" data-preview-output="' + esc(record.id) + '" title="点击查看大图"><img src="' + esc(url) + '" alt="' + esc(record.prompt || '生成图片') + '" loading="lazy" /></button>';
+    } else if (kind === 'audio') {
+      media = '<div class="output-item-media"><audio controls preload="none" src="' + esc(url) + '"></audio></div>';
+    } else {
+      media = '<div class="output-item-media"><video controls preload="metadata" src="' + esc(url) + '"></video></div>';
+    }
+    var sourceLabel = record.source && record.source.kind === 'command' ? '聊天命令' : record.source && record.source.kind === 'model' ? '模型指令' : '控制台';
+    return (
+      '<article class="output-item">' + media +
+      '<div class="output-item-body">' +
+      '<div class="output-item-top">' + outputKindBadge(kind) + '<span class="muted small">' + esc(sourceLabel) + '</span>' +
+      (record.referenceId ? '<span class="status-pill is-ok">参考图</span>' : '') + '</div>' +
+      '<p class="output-item-prompt">' + esc(record.prompt || '（无提示词）') + '</p>' +
+      '<div class="output-item-meta">' +
+      '<span>' + esc(record.model || '未知模型') + '</span>' +
+      (record.provider ? '<span>· ' + esc(record.provider) + '</span>' : '') +
+      '<span>· ' + fmtTime(record.createdAt) + '</span>' +
+      '<span>· ' + fmtBytes(record.size) + '</span>' +
+      '</div>' +
+      '<div class="output-item-actions"><button type="button" class="btn btn-sm btn-danger-ghost" data-delete-output="' + esc(record.id) + '">删除</button></div>' +
+      '</div></article>'
+    );
+  }
+
+  function renderOutputStatus() {
+    var cardsEl = $('#outputCards');
+    if (!cardsEl) return;
+    var data = state.output || {};
+    var status = data.status;
+    var store = data.store || {};
+    var history = Array.isArray(data.history) ? data.history : [];
+    if (!status) {
+      cardsEl.innerHTML = emptyHtml(data.error ? '读取输出状态失败：' + data.error : '正在读取输出配置…');
+      return;
+    }
+    var cards = [];
+    var total = Number(store.total) || 0;
+    cards.push(
+      cardHtml({
+        title: '作品库',
+        badgeHtml: '<span class="badge ' + (status.enabled ? 'badge-ok' : 'badge-muted') + '"><span class="dot"></span>' + (status.enabled ? '已启用' : '未启用') + '</span>',
+        valueHtml: fmtNum(total) + ' <span class="stat-unit">件</span>',
+        sub: '生成结果保存在本地 data/outputs/',
+        rows: [
+          kvHtml('图片', fmtNum(store.byKind && store.byKind.image)),
+          kvHtml('语音', fmtNum(store.byKind && store.byKind.audio)),
+          kvHtml('视频', fmtNum(store.byKind && store.byKind.video)),
+          kvHtml('占用空间', fmtBytes(store.bytes)),
+          kvHtml('最近生成', store.latestAt ? fmtAgo(store.latestAt) : '—')
+        ]
+      })
+    );
+    var lastByKind = {};
+    for (var i = 0; i < history.length; i += 1) {
+      var kind = history[i].kind;
+      if (!lastByKind[kind]) lastByKind[kind] = history[i].createdAt;
+    }
+    ['image', 'audio', 'video'].forEach(function (kindKey) {
+      var section = status[kindKey] || {};
+      var ready = status.enabled === true && section.enabled === true && section.configured === true;
+      var badge = section.enabled
+        ? '<span class="badge ' + (ready ? 'badge-ok' : 'badge-warn') + '"><span class="dot"></span>' + (ready ? '已就绪' : '待补全') + '</span>'
+        : '<span class="badge badge-muted"><span class="dot"></span>未启用</span>';
+      var rows = [];
+      if (kindKey === 'image') {
+        rows.push(kvHtml('模型', esc(section.model || '—')));
+        rows.push(kvHtml('尺寸', esc(section.size || '—')));
+        rows.push(kvHtml('每次张数', fmtNum(section.count)));
+        var referenceStatus = section.reference || {};
+        var referenceText = referenceStatus.enabled
+          ? referenceStatus.configured
+            ? (referenceStatus.trigger === 'always' ? '始终使用' : '关键词触发') + ' · ' + (referenceStatus.requestMode === 'edits' ? 'edits' : 'generations')
+            : '已启用，待选择参考图'
+          : '关闭';
+        rows.push(kvHtml('角色参考', esc(referenceText)));
+      } else if (kindKey === 'audio') {
+        rows.push(kvHtml('模型', esc(section.model || '—')));
+        rows.push(kvHtml('格式 / 音色', esc((section.format || '—') + ' / ' + (section.voice || '—'))));
+      } else {
+        rows.push(kvHtml('协议', esc(section.preset || '—')));
+        rows.push(kvHtml('模型', esc(section.model || '—')));
+        rows.push(kvHtml('轮询 / 超时', section.configured ? '已配置' : '—'));
+      }
+      rows.push(kvHtml('请求地址', '<span class="mono">' + esc(section.requestUrl || '—') + '</span>'));
+      rows.push(kvHtml('最近生成', lastByKind[kindKey] ? fmtAgo(lastByKind[kindKey]) : '—'));
+      cards.push(
+        cardHtml({
+          title: OUTPUT_KIND_LABELS[kindKey] + '输出',
+          badgeHtml: badge,
+          valueHtml: esc(section.model || '未配置模型'),
+          sub: section.baseUrl || '尚未填写 Base URL',
+          rows: rows
+        })
+      );
+    });
+    cardsEl.innerHTML = cards.join('');
+  }
+
+  function renderOutputKindTabs() {
+    var container = $('#outputKindTabs');
+    if (!container) return;
+    container.innerHTML = ['image', 'audio', 'video'].map(function (kind) {
+      var active = state.output.kind === kind;
+      return (
+        '<button type="button" class="seg-btn' + (active ? ' is-active' : '') + '" data-output-kind="' + kind + '" role="tab" aria-selected="' + active + '">' +
+        esc(OUTPUT_KIND_ICONS[kind] + ' ' + OUTPUT_KIND_LABELS[kind]) + '</button>'
+      );
+    }).join('');
+    var prompt = $('#outputPrompt');
+    if (prompt) prompt.placeholder = '例如：' + OUTPUT_KIND_PROMPTS[state.output.kind];
+  }
+
+  function renderOutputResult(records) {
+    var el = $('#outputResult');
+    if (!el) return;
+    var list = Array.isArray(records) ? records : [];
+    if (!list.length) {
+      el.innerHTML = '';
+      return;
+    }
+    el.innerHTML =
+      '<div class="output-result-grid">' +
+      list.map(function (record) {
+        var url = outputMediaUrl(record.id);
+        var preview = '';
+        if (record.kind === 'image') {
+          preview = '<img src="' + esc(url) + '" alt="' + esc(record.prompt || '生成图片') + '" />';
+        } else if (record.kind === 'audio') {
+          preview = '<audio controls src="' + esc(url) + '"></audio>';
+        } else {
+          preview = '<video controls src="' + esc(url) + '"></video>';
+        }
+        return (
+          '<div class="output-result-preview">' + preview +
+          '<div class="output-result-meta">' + outputKindBadge(record.kind) + ' ' + esc(record.model || '') +
+          ' · ' + fmtBytes(record.size) + ' · ' + fmtTime(record.createdAt) + '</div>' +
+          '<p class="output-item-prompt">' + esc(record.prompt || '') + '</p></div>'
+        );
+      }).join('') +
+      '</div>';
+  }
+
+  function renderOutputHistory() {
+    var el = $('#outputHistory');
+    if (!el) return;
+    var records = Array.isArray(state.output.history) ? state.output.history : [];
+    if (!records.length) {
+      el.innerHTML = emptyHtml('还没有生成记录。配置好接口后，可以在右侧试跑或直接在 QQ 里用 #画 / #语音 / #视频。');
+    } else {
+      el.innerHTML = records.map(outputRecordHtml).join('');
+    }
+    var more = $('#btnOutputMore');
+    if (more) more.hidden = records.length >= (Number(state.output.total) || 0);
+  }
+
+  async function loadOutputLibrary() {
+    var seq = ++state.output.seq;
+    var results = await Promise.allSettled([
+      api('output.status'),
+      api('output.history', { limit: 30, offset: 0 }),
+      api('output.reference.list')
+    ]);
+    if (seq !== state.output.seq) return;
+    if (results[0].status === 'fulfilled') {
+      var statusResult = results[0].value || {};
+      state.output.status = statusResult.status || null;
+      state.output.store = statusResult.store || null;
+    }
+    if (results[1].status === 'fulfilled') {
+      var history = results[1].value || {};
+      state.output.history = Array.isArray(history.items) ? history.items : [];
+      state.output.total = Number(history.total) || state.output.history.length;
+    }
+    if (results[2].status === 'fulfilled') {
+      var refs = results[2].value || {};
+      state.output.references = Array.isArray(refs.items) ? refs.items : [];
+      state.output.referenceActive = typeof refs.active === 'string' ? refs.active : '';
+    }
+    renderOutputStatus();
+    renderOutputHistory();
+    renderOutputReferencePanel();
+  }
+
+  async function loadOutputPage(options) {
+    var opts = options || {};
+    state.output.loading = true;
+    try {
+      await loadConfig({ force: opts.force === true });
+      var results = await Promise.allSettled([
+        api('output.status'),
+        api('output.history', { limit: 30, offset: 0 }),
+        api('output.reference.list')
+      ]);
+      if (results[0].status === 'fulfilled') {
+        var statusResult = results[0].value || {};
+        state.output.status = statusResult.status || null;
+        state.output.store = statusResult.store || null;
+      } else {
+        state.output.status = null;
+        state.output.error = errMessage(results[0].reason);
+      }
+      if (results[0].status === 'fulfilled') state.output.error = '';
+      if (results[1].status === 'fulfilled') {
+        var history = results[1].value || {};
+        state.output.history = Array.isArray(history.items) ? history.items : [];
+        state.output.total = Number(history.total) || state.output.history.length;
+      } else {
+        state.output.history = [];
+        state.output.total = 0;
+      }
+      if (results[2].status === 'fulfilled') {
+        var refs = results[2].value || {};
+        state.output.references = Array.isArray(refs.items) ? refs.items : [];
+        state.output.referenceActive = typeof refs.active === 'string' ? refs.active : '';
+      }
+      renderOutputStatus();
+      renderOutputConfig();
+      renderOutputWarnings();
+      renderOutputKindTabs();
+      renderOutputHistory();
+      renderOutputReferencePanel();
+    } finally {
+      state.output.loading = false;
+    }
+  }
+
+  async function loadMoreOutput() {
+    var offset = (state.output.history || []).length;
+    var result = await api('output.history', { limit: 30, offset: offset });
+    var items = result && Array.isArray(result.items) ? result.items : [];
+    state.output.history = (state.output.history || []).concat(items);
+    state.output.total = result && Number.isFinite(Number(result.total)) ? Number(result.total) : state.output.history.length;
+    renderOutputHistory();
+  }
+
+  function saveOutputConfig() {
+    return withLoading($('#btnOutputSave'), async function () {
+      var patch = collectConfigPatchFrom($('#outputConfig'));
+      var result = await api('config.save', { patch: patch });
+      if (result && result.config && typeof result.config === 'object') state.config = result.config;
+      state.configLoaded = true;
+      state.configWarnings = result && Array.isArray(result.warnings) ? result.warnings : [];
+      renderOutputConfig();
+      renderOutputWarnings();
+      if (state.tab === 'config') renderConfigWarnings($('#configWarnings'), state.configWarnings);
+      toast('多模态输出接口配置已保存', 'success');
+      await loadOutputLibrary();
+      refreshSnapshot({ silent: true }).catch(function () {});
+    }, '保存中…');
+  }
+
+  async function testOutputInterface(kind, button) {
+    var resultEl = $('[data-output-test-result="' + kind + '"]');
+    if (resultEl) {
+      resultEl.className = 'output-test-result';
+      resultEl.textContent = '检测中…';
+    }
+    try {
+      var result = await withLoading(button, function () { return api('output.test', { kind: kind }); }, '检测中…');
+      var ok = result && result.ok !== false;
+      var warning = result && result.warning ? String(result.warning) : '';
+      var suggestion = result && result.suggestedBaseUrl
+        ? '当前 Base URL 未包含 /v1，已自动按 ' + String(result.url) + ' 请求；建议把 Base URL 改为 ' + String(result.suggestedBaseUrl)
+        : '';
+      if (resultEl) {
+        if (!ok) {
+          resultEl.className = 'output-test-result result-err';
+          resultEl.textContent = '检测失败：' + String((result && result.error) || '未知错误');
+        } else if (warning) {
+          resultEl.className = 'output-test-result result-ok';
+          resultEl.textContent = '配置已通过：' + warning;
+        } else {
+          var parts = ['接口可达'];
+          if (result.mode === 'models') {
+            parts.push('模型列表 ' + fmtNum(result.modelCount) + ' 个');
+            if (result.modelFound === true) parts.push('已找到配置模型');
+            else if (result.modelFound === false) parts.push('未在模型列表中匹配到「' + String((state.config && getPath(state.config, 'output.' + kind + '.model')) || '') + '」');
+          }
+          if (result.url) parts.push('实际请求 ' + String(result.url));
+          if (result.ms !== undefined) parts.push('耗时 ' + fmtNum(result.ms) + 'ms');
+          if (suggestion) parts.push(suggestion);
+          resultEl.className = result.modelFound === false ? 'output-test-result' : 'output-test-result result-ok';
+          resultEl.textContent = parts.join(' · ');
+        }
+      }
+      if (!ok) toast('接口检测失败：' + String((result && result.error) || '未知错误'), 'error');
+      else if (warning) toast(warning, 'warn');
+      else if (suggestion) toast(suggestion, 'warn');
+      else if (result.modelFound === false) toast('接口可达，但模型名未在模型列表中找到，请确认模型可用', 'warn');
+      else toast(OUTPUT_KIND_LABELS[kind] + '接口检测通过', 'success');
+      return result;
+    } catch (err) {
+      if (resultEl) {
+        resultEl.className = 'output-test-result result-err';
+        resultEl.textContent = '检测失败：' + errMessage(err);
+      }
+      throw err;
+    }
+  }
+
+  function runOutputGenerate() {
+    var kind = state.output.kind;
+    var promptEl = $('#outputPrompt');
+    var prompt = promptEl ? String(promptEl.value || '').trim() : '';
+    if (prompt === '') {
+      toast('请先填写提示词', 'warn');
+      return Promise.resolve();
+    }
+    var statusEl = $('#outputGenerateStatus');
+    var started = Date.now();
+    var timer = 0;
+    if (statusEl) {
+      statusEl.textContent = OUTPUT_KIND_LABELS[kind] + '生成中…';
+      timer = window.setInterval(function () {
+        var seconds = Math.round((Date.now() - started) / 1000);
+        statusEl.textContent = OUTPUT_KIND_LABELS[kind] + '生成中… 已等待 ' + seconds + ' 秒' + (kind === 'video' ? '（视频可能需要几分钟）' : '');
+      }, 1000);
+    }
+    return withLoading($('#btnOutputGenerate'), async function () {
+      try {
+        var result = await api('output.generate', { kind: kind, prompt: prompt }, { timeoutMs: 660000 });
+        state.output.lastRecords = result && Array.isArray(result.records) ? result.records : [];
+        renderOutputResult(state.output.lastRecords);
+        var elapsed = Math.round((Date.now() - started) / 1000);
+        if (statusEl) statusEl.textContent = '生成完成，用时 ' + elapsed + ' 秒';
+        toast(OUTPUT_KIND_LABELS[kind] + '生成完成', 'success');
+        await loadOutputLibrary();
+        refreshSnapshot({ silent: true }).catch(function () {});
+        return result;
+      } catch (err) {
+        if (statusEl) statusEl.textContent = '生成失败';
+        throw err;
+      } finally {
+        if (timer) window.clearInterval(timer);
+      }
+    }, '生成中…');
+  }
+
+  function openOutputPreview(id) {
+    var record = outputRecordById(id);
+    if (!record) return;
+    var url = outputMediaUrl(id);
+    openModal({
+      title: OUTPUT_KIND_LABELS[record.kind] + '作品预览',
+      wide: true,
+      bodyHtml:
+        '<div class="output-result-preview"><img src="' + esc(url) + '" alt="' + esc(record.prompt || '') + '" /></div>' +
+        '<div class="output-result-meta">' + outputKindBadge(record.kind) + ' ' + esc(record.model || '') + ' · ' + fmtBytes(record.size) + ' · ' + fmtTime(record.createdAt) + '</div>' +
+        '<p class="output-item-prompt" style="margin-top:8px">' + esc(record.prompt || '') + '</p>',
+      actions: [{ label: '关闭', onClick: function (ctx) { ctx.close(); } }]
+    });
+  }
+
+  async function deleteOutputRecord(id) {
+    var confirmed = await confirmModal({
+      title: '删除生成结果',
+      message: '确定删除这条生成记录及本地文件吗？删除后无法恢复。',
+      confirmLabel: '删除',
+      danger: true
+    });
+    if (!confirmed) return;
+    await api('output.delete', { id: id });
+    state.output.history = (state.output.history || []).filter(function (record) { return record.id !== id; });
+    state.output.total = Math.max(0, (Number(state.output.total) || 0) - 1);
+    renderOutputHistory();
+    toast('已删除生成结果', 'success');
+    await loadOutputLibrary();
+  }
+
+  async function clearOutputLibrary() {
+    var confirmed = await confirmModal({
+      title: '清空作品库',
+      message: '将删除所有生成的图片 / 语音 / 视频文件，无法恢复。确定继续吗？',
+      confirmLabel: '全部清空',
+      danger: true
+    });
+    if (!confirmed) return;
+    await api('output.clear');
+    state.output.history = [];
+    state.output.total = 0;
+    state.output.lastRecords = [];
+    renderOutputResult([]);
+    renderOutputHistory();
+    toast('作品库已清空', 'success');
+    await loadOutputLibrary();
   }
 
   // ---------------------------------------------------------------------------
@@ -2277,17 +3583,80 @@
       handle(function () {
         return withLoading(button, async function () {
           await refreshSnapshot();
-          await loadTabNow(state.tab, { force: state.tab !== 'config' });
+          await loadTabNow(state.tab, { force: true });
           toast('已刷新', 'success');
         }, '刷新中…');
       });
     });
+    on('#sideToggle', 'click', function () {
+      var sidebar = $('#appSidebar');
+      setSidebarOpen(!(sidebar && sidebar.classList.contains('is-open')));
+    });
+    on('#sideBackdrop', 'click', function () {
+      setSidebarOpen(false);
+    });
     document.addEventListener('keydown', function (event) {
+      if ((event.ctrlKey || event.metaKey) && String(event.key).toLowerCase() === 'k') {
+        event.preventDefault();
+        var search = $('#navSearch');
+        if (search) {
+          search.focus();
+          search.select();
+        }
+        return;
+      }
       if (event.key !== 'Escape') return;
       if (modalState) return;
       if (event.defaultPrevented) return;
+      var sidebar = $('#appSidebar');
+      if (sidebar && sidebar.classList.contains('is-open')) {
+        setSidebarOpen(false);
+        return;
+      }
+      var active = document.activeElement;
+      if (active && (active.id === 'navSearch' || active.id === 'configSearch')) {
+        active.value = '';
+        if (active.id === 'navSearch') filterSideNav('');
+        else {
+          filterConfigFields('');
+          var count = $('#configSearchCount');
+          if (count) count.textContent = '';
+        }
+        active.blur();
+        return;
+      }
       exitConsole();
     });
+  }
+
+  function bindNavigation() {
+    var nav = $('#sideNav');
+    if (nav) {
+      nav.addEventListener('click', function (event) {
+        var target = event.target;
+        if (!(target instanceof Element)) return;
+        var button = target.closest('.nav-item');
+        if (!button) return;
+        navigate(button.dataset.nav, { section: button.dataset.configSection || '' });
+      });
+    }
+    on(
+      '#navSearch',
+      'input',
+      debounce(function () {
+        var input = $('#navSearch');
+        filterSideNav(input ? input.value : '');
+      }, 120)
+    );
+    document.addEventListener('click', function (event) {
+      var target = event.target;
+      if (!(target instanceof Element)) return;
+      var link = target.closest('[data-nav-link]');
+      if (!link) return;
+      event.preventDefault();
+      navigate(link.dataset.navLink, { section: link.dataset.configSection || '' });
+    });
+    window.addEventListener('hashchange', applyLocation);
   }
 
   /**
@@ -2342,12 +3711,121 @@
     }, closed ? 150 : 0);
   }
 
-  function bindTabs() {
-    $$('.tab').forEach(function (button) {
-      button.addEventListener('click', function () {
-        activateTab(button.dataset.tab);
+  function bindOutput() {
+    on('#btnOutputSave', 'click', function () {
+      handle(saveOutputConfig);
+    });
+    on('#btnOutputRefresh', 'click', function () {
+      var button = $('#btnOutputRefresh');
+      handle(function () {
+        return withLoading(button, function () { return loadOutputPage({ force: true }); }, '刷新中…');
       });
     });
+    on('#btnOutputHistoryRefresh', 'click', function () {
+      var button = $('#btnOutputHistoryRefresh');
+      handle(function () {
+        return withLoading(button, loadOutputLibrary, '刷新中…');
+      });
+    });
+    on('#btnOutputMore', 'click', function () {
+      var button = $('#btnOutputMore');
+      handle(function () {
+        return withLoading(button, loadMoreOutput, '加载中…');
+      });
+    });
+    on('#btnOutputGenerate', 'click', function () {
+      handle(runOutputGenerate);
+    });
+    on('#btnOutputClear', 'click', function () {
+      var button = $('#btnOutputClear');
+      handle(function () {
+        return withLoading(button, clearOutputLibrary, '清理中…');
+      });
+    });
+    on('#outputKindTabs', 'click', function (event) {
+      var target = event.target;
+      if (!(target instanceof Element)) return;
+      var button = target.closest('[data-output-kind]');
+      if (!button) return;
+      state.output.kind = button.dataset.outputKind || 'image';
+      renderOutputKindTabs();
+    });
+    var configRoot = $('#outputConfig');
+    if (configRoot) {
+      configRoot.addEventListener('click', function (event) {
+        var target = event.target;
+        if (!(target instanceof Element)) return;
+        var testButton = target.closest('[data-output-test]');
+        if (testButton) {
+          handle(function () {
+            return testOutputInterface(testButton.dataset.outputTest, testButton);
+          });
+          return;
+        }
+        if (target.closest('[data-reference-upload]')) {
+          var input = $('#referenceFileInput');
+          if (input) input.click();
+          return;
+        }
+        var useButton = target.closest('[data-reference-use]');
+        if (useButton) {
+          handle(function () {
+            return withLoading(useButton, function () {
+              return activateOutputReference(useButton.dataset.referenceUse, false);
+            }, '设置中…');
+          });
+          return;
+        }
+        if (target.closest('[data-reference-clear]')) {
+          handle(function () {
+            return withLoading(target.closest('[data-reference-clear]'), clearOutputReference, '处理中…');
+          });
+          return;
+        }
+        var deleteButton = target.closest('[data-reference-delete]');
+        if (deleteButton) {
+          handle(function () {
+            return deleteOutputReference(deleteButton.dataset.referenceDelete);
+          });
+        }
+      });
+      configRoot.addEventListener('change', function (event) {
+        var target = event.target;
+        if (!(target instanceof Element)) return;
+        if (target.id === 'referenceFileInput') {
+          var file = target.files && target.files[0] ? target.files[0] : null;
+          target.value = '';
+          if (file) {
+            handle(function () {
+              return uploadOutputReference(file);
+            });
+          }
+          return;
+        }
+        refreshConditionalFields(configRoot);
+      });
+      configRoot.addEventListener('input', function () {
+        refreshConditionalFields(configRoot);
+      });
+    }
+    var historyRoot = $('#outputHistory');
+    if (historyRoot) {
+      historyRoot.addEventListener('click', function (event) {
+        var target = event.target;
+        if (!(target instanceof Element)) return;
+        var preview = target.closest('[data-preview-output]');
+        if (preview) {
+          openOutputPreview(preview.dataset.previewOutput);
+          return;
+        }
+        var remove = target.closest('[data-delete-output]');
+        if (remove) {
+          handle(function () {
+            return deleteOutputRecord(remove.dataset.deleteOutput);
+          });
+        }
+      });
+    }
   }
 
   function bindOverview() {
@@ -2403,16 +3881,45 @@
       var button = $('#btnConfigRefresh');
       handle(function () {
         return withLoading(button, async function () {
-          await loadConfig();
+          await loadConfig({ force: true });
+          if (state.configSection) focusConfigSection(state.configSection);
           toast('已重新读取配置', 'success');
         }, '读取中…');
       });
+    });
+    on(
+      '#configSearch',
+      'input',
+      debounce(function () {
+        var input = $('#configSearch');
+        filterConfigFields(input ? input.value : '');
+      }, 120)
+    );
+    on('#configNav', 'click', function (event) {
+      var target = event.target;
+      if (!(target instanceof Element)) return;
+      var button = target.closest('[data-config-jump]');
+      if (!button) return;
+      var search = $('#configSearch');
+      if (search && String(search.value || '') !== '') {
+        search.value = '';
+        filterConfigFields('');
+        var count = $('#configSearchCount');
+        if (count) count.textContent = '';
+      }
+      navigate('config', { section: button.dataset.configJump || '' });
     });
     var form = $('#configForm');
     if (form) {
       form.addEventListener('submit', function (event) {
         event.preventDefault();
         handle(saveConfig);
+      });
+      form.addEventListener('change', function () {
+        refreshConditionalFields(form);
+      });
+      form.addEventListener('input', function () {
+        refreshConditionalFields(form);
       });
     }
   }
@@ -2731,16 +4238,18 @@
     state.booted = true;
     bindGlobal();
     bindHeader();
-    bindTabs();
+    renderSideNav();
+    bindNavigation();
     bindOverview();
     bindConfig();
+    bindOutput();
     bindStickers();
     bindBudget();
     bindChats();
     bindPeople();
     bindLogs();
     renderOverview();
-    activateTab('overview');
+    applyLocation();
     state.pollTimer = window.setInterval(function () {
       if (document.hidden) return;
       refreshSnapshot({ silent: true }).catch(function () {});

@@ -277,22 +277,26 @@ export function createQQApi({ configStore, logger, fetchImpl } = {}) {
     return url
   }
 
-  /** Upload an image to QQ's media store and return its `file_info`. */
+  /**
+   * Upload an image / video / voice file to QQ's media store and return its
+   * `file_info`. `fileType`: 1 image, 2 video, 3 voice.
+   */
   async function uploadMedia({ kind, targetId, buffer, fileName, fileType = 1 } = {}) {
     kindSegment(kind) // validate kind before touching the buffer
     const id = String(targetId ?? '').trim()
     if (id === '') throw new QQApiError('缺少上传目标 openid', { code: 'BAD_REQUEST' })
+    const normalizedFileType = [1, 2, 3, 4].includes(Number(fileType)) ? Number(fileType) : 1
     let data
     if (Buffer.isBuffer(buffer)) data = buffer
     else if (buffer instanceof Uint8Array) data = Buffer.from(buffer)
-    else throw new QQApiError('图片内容必须是 Buffer', { code: 'BAD_REQUEST' })
-    if (data.length === 0) throw new QQApiError('图片内容为空', { code: 'BAD_MEDIA' })
-    if (data.length > MAX_MEDIA_BYTES) throw new QQApiError('图片超过 5MB 限制，无法发送', { code: 'MEDIA_TOO_LARGE' })
+    else throw new QQApiError('媒体内容必须是 Buffer', { code: 'BAD_REQUEST' })
+    if (data.length === 0) throw new QQApiError('媒体内容为空', { code: 'BAD_MEDIA' })
+    if (data.length > MAX_MEDIA_BYTES) throw new QQApiError('媒体超过 5MB 直传限制，无法上传', { code: 'MEDIA_TOO_LARGE' })
     const name = typeof fileName === 'string' && fileName.trim() !== '' ? fileName.trim() : 'image.jpg'
     const response = await request({
       method: 'POST',
       path: `/v2/${kindSegment(kind)}/${encodeURIComponent(id)}/files`,
-      body: { file_type: fileType, file_name: name, file_data: data.toString('base64') }
+      body: { file_type: normalizedFileType, file_name: name, file_data: data.toString('base64') }
     })
     const fileInfo = typeof response?.file_info === 'string' ? response.file_info : typeof response?.fileInfo === 'string' ? response.fileInfo : ''
     if (fileInfo === '') throw new QQApiError('上传图片失败：QQ 接口未返回 file_info', { code: 'BAD_RESPONSE' })
@@ -315,10 +319,10 @@ export function createQQApi({ configStore, logger, fetchImpl } = {}) {
     return request({ method: 'POST', path: messagePath(kind, targetId), body })
   }
 
-  /** Send an image by `file_info` returned from `uploadMedia` (msg_type 7). */
-  async function sendImage({ kind, targetId, fileInfo, msgId, msgSeq, eventId } = {}) {
+  /** Send a rich-media message by `file_info` returned from `uploadMedia` (msg_type 7). */
+  async function sendMedia({ kind, targetId, fileInfo, msgId, msgSeq, eventId } = {}) {
     if (typeof fileInfo !== 'string' || fileInfo === '') {
-      throw new QQApiError('缺少 file_info，无法发送图片', { code: 'BAD_REQUEST' })
+      throw new QQApiError('缺少 file_info，无法发送媒体', { code: 'BAD_REQUEST' })
     }
     const body = { msg_type: 7, media: { file_info: fileInfo } }
     if (typeof msgId === 'string' && msgId !== '') {
@@ -327,6 +331,11 @@ export function createQQApi({ configStore, logger, fetchImpl } = {}) {
     }
     if (typeof eventId === 'string' && eventId !== '') body.event_id = eventId
     return request({ method: 'POST', path: messagePath(kind, targetId), body })
+  }
+
+  /** Backwards-compatible image alias (the wire format is the same). */
+  async function sendImage(args = {}) {
+    return sendMedia(args)
   }
 
   /** Bot profile. Never throws: returns null so callers can gate optional UI. */
@@ -339,5 +348,5 @@ export function createQQApi({ configStore, logger, fetchImpl } = {}) {
     }
   }
 
-  return { getToken, request, getGatewayUrl, uploadMedia, sendText, sendImage, getBotMe, invalidateToken }
+  return { getToken, request, getGatewayUrl, uploadMedia, sendText, sendMedia, sendImage, getBotMe, invalidateToken }
 }

@@ -1,7 +1,7 @@
 {
   "name": "easy-qqbot",
-  "version": "0.2.0",
-  "description": "A simple, easy-to-use QQ bot plugin for DeepSeek Harness: budget control, long-term memory (per-speaker in groups), context compression, personalization, optional multimodal recognition for images/audio/video, batch sticker import/tagging and sticker replies. All code and data live inside this package directory.",
+  "version": "0.3.0",
+  "description": "A simple, easy-to-use QQ bot plugin for DeepSeek Harness: a cute blue-whale-girl default persona, budget control, long-term memory (per-speaker in groups), context compression, personalization, optional multimodal recognition (image/audio/video -> text) and multimodal output (text -> image/speech/video through third-party APIs, with character reference images), batch sticker import/tagging and sticker replies. All code and data live inside this package directory.",
   "type": "module",
   "main": "index.js",
   "exports": {

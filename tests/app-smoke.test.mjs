@@ -75,7 +75,7 @@ test('createApp boots with fake services, serves admin API and disposes cleanly'
         assert.equal(registeredRoutes[0].kind, 'prefix')
 
         const snapshot = await dispatchAdminMethod('snapshot', {}, app)
-        assert.equal(snapshot.version, '0.2.0')
+        assert.equal(snapshot.version, '0.3.0')
         assert.equal(snapshot.status.state ?? 'standby', 'standby')
         assert.equal(snapshot.chats, 0)
 
@@ -108,6 +108,43 @@ test('createApp boots with fake services, serves admin API and disposes cleanly'
         const savedVisionAgain = await dispatchAdminMethod('config.save', { patch: { multimodal: { enabled: false } } }, app)
         assert.equal(savedVisionAgain.config.multimodal.hasApiKey, true)
         assert.equal(savedVisionAgain.config.multimodal.enabled, false)
+
+        // The output provider keys use the same write-only contract, one mask
+        // per modality (image / audio / video).
+        const savedOutput = await dispatchAdminMethod(
+          'config.save',
+          {
+            patch: {
+              output: {
+                enabled: true,
+                image: {
+                  enabled: true,
+                  baseUrl: 'https://api.example.com/v1',
+                  apiKey: 'sk-output-image',
+                  model: 'img-model'
+                },
+                audio: { apiKey: 'sk-output-audio' },
+                video: { apiKey: 'sk-output-video' }
+              }
+            }
+          },
+          app
+        )
+        assert.equal(savedOutput.config.output.image.apiKey, '')
+        assert.equal(savedOutput.config.output.image.hasApiKey, true)
+        assert.equal(savedOutput.config.output.audio.hasApiKey, true)
+        assert.equal(savedOutput.config.output.video.hasApiKey, true)
+        assert.equal(savedOutput.config.output.image.model, 'img-model')
+
+        const savedOutputAgain = await dispatchAdminMethod('config.save', { patch: { output: { image: { enabled: false } } } }, app)
+        assert.equal(savedOutputAgain.config.output.image.hasApiKey, true)
+        assert.equal(savedOutputAgain.config.output.image.enabled, false)
+        assert.equal(savedOutputAgain.config.output.audio.hasApiKey, true)
+
+        const outputStatus = await dispatchAdminMethod('output.status', {}, app)
+        assert.equal(outputStatus.status.enabled, true, 'output.enabled stays from the previous save')
+        assert.equal(outputStatus.status.image.enabled, false)
+        assert.equal(outputStatus.store.total, 0)
 
         const stats = await dispatchAdminMethod('stickers.stats', {}, app)
         assert.equal(stats.total, 0)

@@ -30,7 +30,7 @@ const NUMBER_LIMITS = {
   maxHistoryMessages: { min: 2, max: 200, integer: true },
   temperature: { min: 0, max: 2 }
 }
-const DEFAULT_NAME = '小Q'
+const DEFAULT_NAME = '鲸鱼娘'
 const DEFAULT_REPLY_MAX_CHARS = 800
 const DEFAULT_STICKER_CHANCE = 0.35
 const DEFAULT_MAX_HISTORY_MESSAGES = 40

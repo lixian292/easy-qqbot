@@ -203,6 +203,10 @@ test('uploadMedia：base64 请求体、file_info 归一化、5MB 上限', async 
   assert.equal(body.file_name, 'a.png')
   assert.equal(body.file_data, buffer.toString('base64'))
 
+  await api.uploadMedia({ kind: 'c2c', targetId: 'u-1', buffer: Buffer.from('voice'), fileName: 'a.mp3', fileType: 3 })
+  const voiceCall = fetchImpl.calls.filter((call) => call.url.includes('/v2/users/u-1/files')).at(-1)
+  assert.equal(JSON.parse(voiceCall.init.body).file_type, 3)
+
   const hugeApi = createQQApi({
     configStore: credentialStore(),
     logger: makeLogger(),
@@ -240,7 +244,13 @@ test('sendText / sendImage 请求体符合 QQ v2 消息协议', async () => {
   body = JSON.parse(call.init.body)
   assert.deepEqual(body, { msg_type: 7, media: { file_info: 'file-info-9' }, msg_id: 'm-1', msg_seq: 1 })
 
+  await api.sendMedia({ kind: 'group', targetId: 'g-1', fileInfo: 'file-info-voice', msgId: 'm-2', msgSeq: 2 })
+  call = fetchImpl.calls.filter((item) => item.url.includes('/v2/groups/g-1/messages')).at(-1)
+  body = JSON.parse(call.init.body)
+  assert.deepEqual(body, { msg_type: 7, media: { file_info: 'file-info-voice' }, msg_id: 'm-2', msg_seq: 2 })
+
   await assert.rejects(api.sendImage({ kind: 'c2c', targetId: 'u-1' }), (error) => error.code === 'BAD_REQUEST')
+  await assert.rejects(api.sendMedia({ kind: 'c2c', targetId: 'u-1' }), (error) => error.code === 'BAD_REQUEST')
 })
 
 test('204 空响应返回 {}，query 参数正确拼接', async () => {

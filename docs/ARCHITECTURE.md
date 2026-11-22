@@ -24,8 +24,9 @@ qqbot/
 │   ├── budget/              # 预算用量记录与限额检查
 │   ├── persona/             # 全局 / 会话 / 用户个性化配置
 │   ├── multimodal/          # 可选：图片/音频/视频识别（OpenAI 兼容 + ffmpeg 抽帧）
+│   ├── output/              # 可选：文字 → 图片/语音/视频生成、异步视频轮询、作品库
 │   ├── stickers/            # 表情包索引、导入、打标、挑选
-│   └── admin/               # 管理后台（HTTP API + 静态页面）
+│   └── admin/               # 管理后台（HTTP API + 分组导航静态页面）
 ├── tools/                   # 命令行工具（批量导入、旧数据迁移、静态检查）
 ├── data/                    # 运行时数据（config.json、记忆、表情包、预算、日志）
 └── import/                  # 批量表情包导入投放目录
@@ -47,6 +48,10 @@ qqbot/data/
 ├── personas.json            # 会话级个性化覆盖
 ├── stickers/index.json      # 表情包索引（id/hash/tags/desc/layer/使用次数）
 ├── stickers/<layer>/<id>.<ext>   # 表情包文件：library/candidate/negative/trash
+├── outputs/index.json       # 多模态输出作品索引（id/kind/mime/size/prompt/model/source/referenceId）
+├── outputs/<id>.<ext>       # 生成的图片 / 音频 / 视频文件
+├── references/index.json    # 角色形象参考图索引
+├── references/<id>.<ext>    # 上传的蓝色鲸鱼娘参考图（图片生成输入）
 └── logs/qqbot.log           # 滚动日志（管理页可看最近 N 条）
 ```
 
@@ -59,14 +64,15 @@ QQ 网关(WebSocket) → gateway.js 解析 op/t
     → inbound.js 归一化事件（C2C_MESSAGE_CREATE / GROUP_AT_MESSAGE_CREATE）
     → app.js 入队（同一 chat 串行，避免上下文竞态）
     → brain/chat.js
-        1. 命令识别（帮助/预算/表情/清空上下文…）
+        1. 命令识别（帮助/预算/表情/清空上下文/画/语音/视频…）
         2. 入站媒体：图片/语音/视频 → 可选多模态识别（失败降级占位）；图片同时入候选库
         3. budget.check() → 超限则发提示并结束
         4. 记忆召回 + 压缩判断（memory/compress.js）；群聊额外读取当前发言者成员事实
         5. prompt 组装（人设 + 个性化 + 会话事实 + 当前发言者事实 + 近况 + 表情包标签目录）
         6. ctx.llm.stream() → 文本 + usage
         7. budget.record() / memory.append() / 事实抽取（异步，群聊按发言者归因）
-        8. 解析 [[sticker: 标签]] → 表情包库挑选 → 发文字 + 发图片
+        8. 解析 [[sticker: 标签]] → 表情包库挑选；解析 [[image/voice/video: 描述]] → 可选多模态输出
+        9. 先发文字 + 表情；再后台生成多模态内容 → 作品库 → QQ 富媒体（msg_type 7）
     → qq/outbound.js → api.js（被动回复 msg_id+msg_seq；超时转主动消息）
 ```
 
@@ -80,6 +86,7 @@ QQ 网关(WebSocket) → gateway.js 解析 op/t
 | 记忆 | 会话历史 JSONL、长期事实、用户画像、群成员按 ID 事实、按 token 阈值压缩摘要 | `host/memory/*` |
 | 个性化 | 全局人设 + 会话级覆盖（人设/风格/模型/表情频率/记忆开关） | `host/persona/store.js` |
 | 多模态识别 | 可选：图片/音频/视频 → 中文描述；OpenAI 兼容接口，视频支持 ffmpeg 抽帧或 video_url | `host/multimodal/*` |
+| 多模态输出 | 可选：文字 → 图片（OpenAI 兼容，支持角色参考图 edits / generations）/ 语音（OpenAI 兼容 TTS）/ 视频（硅基流动、OpenAI Videos、自定义异步任务）；作品落盘与保留策略；聊天命令与模型指令 | `host/output/*` |
 | 表情包 | 批量扫描导入、SHA-256 去重、图层（候选/正式/负面/回收）、标签与描述、按标签挑选、管理页打标 | `host/stickers/*` |
 | 管理后台 | 同源 HTTP API + 静态页面：状态、配置、表情包、预算、会话、日志 | `host/admin/*` |
 
@@ -90,5 +97,6 @@ QQ 网关(WebSocket) → gateway.js 解析 op/t
 - **不写 profile 文件**：只由 `plugin_manager install_bundle` 安装；插件自身配置写在 `data/config.json`。
 - **不改会话日志**：本插件不注入 DSH session event，记忆/预算都是插件自有数据。
 - **可降级**：`ctx.llm` / `webServer` 缺失时插件不崩溃，管理页或聊天能力按需禁用并在日志说明。
-- **秘密不入日志、不回传前端**：`appSecret`、多模态 `apiKey` 在 API 响应中只返回掩码，留空表示不修改。
+- **秘密不入日志、不回传前端**：`appSecret`、多模态识别 `apiKey` 与输出各模态 `apiKey` 在 API 响应中只返回掩码，留空表示不修改。
 - **进程内串行**：同一 chat 的回复串行处理；预算/索引写入用 promise 队列串行化。
+- **生成为可降级副作用**：多模态输出失败只回文字提示，绝不阻塞或破坏正常聊天；模型指令默认关闭，聊天命令默认仅管理员可用。

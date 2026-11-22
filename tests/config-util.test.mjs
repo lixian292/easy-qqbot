@@ -4,7 +4,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { DEFAULT_CONFIG, normalizeConfig, patchConfig, publicConfig, hasCredentials } from '../host/config.js'
+import { DEFAULT_CONFIG, normalizeConfig, patchConfig, preserveSecret, publicConfig, hasCredentials } from '../host/config.js'
 import { createPaths } from '../host/paths.js'
 import {
   chunkText,
@@ -156,6 +156,136 @@ test('multimodal config migrates legacy vision settings and masks the API key', 
   assert.equal(modes.audio.mode, 'transcribe')
   assert.equal(modes.video.mode, 'frames')
   assert.equal(modes.video.frameCount, 16)
+})
+
+test('output config normalizes defaults, validates enums and masks per-modality keys', () => {
+  const { config, warnings } = normalizeConfig({
+    qq: { appId: '1', appSecret: 's' },
+    output: {
+      enabled: true,
+      commandAccess: 'all',
+      image: {
+        enabled: true,
+        baseUrl: 'https://api.example.com/v1/',
+        apiKey: 'sk-image-secret',
+        model: 'img-1',
+        countField: 'batch_size',
+        responseFormat: 'weird'
+      },
+      audio: { apiKey: 'sk-audio-secret', format: 'flac', speed: 9 },
+      video: {
+        preset: 'nope',
+        queryMethod: 'DELETE',
+        requestFormat: 'yaml',
+        successValues: '',
+        pollIntervalMs: 1,
+        maxWaitMs: 99999999
+      }
+    }
+  })
+  assert.equal(config.output.enabled, true)
+  assert.equal(config.output.commandAccess, 'all')
+  assert.equal(normalizeConfig({ output: { commandAccess: 'everyone' } }).config.output.commandAccess, 'admin')
+  assert.equal(config.output.image.baseUrl, 'https://api.example.com/v1')
+  assert.equal(config.output.image.countField, 'batch_size')
+  assert.equal(config.output.image.responseFormat, 'b64_json')
+  assert.equal(config.output.audio.format, 'mp3')
+  assert.equal(config.output.audio.speed, 4)
+  assert.equal(config.output.video.preset, 'siliconflow')
+  assert.equal(config.output.video.queryMethod, 'POST')
+  assert.equal(config.output.video.requestFormat, 'json')
+  assert.equal(config.output.video.successValues, DEFAULT_CONFIG.output.video.successValues)
+  assert.equal(config.output.video.pollIntervalMs, 500)
+  assert.equal(config.output.video.maxWaitMs, 1800000)
+
+  const pub = publicConfig(config)
+  for (const kind of ['image', 'audio', 'video']) {
+    assert.equal(pub.output[kind].apiKey, '')
+    assert.equal(pub.output[kind].hasApiKey, kind !== 'video')
+    assert.equal(pub.output[kind].apiKeyMasked.includes('secret'), false)
+  }
+  assert.ok(warnings.some((warning) => warning.includes('commandAccess') || warning.includes('所有用户')))
+})
+
+test('character reference settings normalize and warn when incomplete', () => {
+  const { config, warnings } = normalizeConfig({
+    output: {
+      enabled: true,
+      image: {
+        reference: {
+          enabled: true,
+          trigger: 'bad',
+          requestMode: 'bad',
+          format: 'bad',
+          keywords: '',
+          maxBytes: 1,
+          maxItems: 999
+        }
+      }
+    }
+  })
+  const reference = config.output.image.reference
+  assert.equal(reference.enabled, true)
+  assert.equal(reference.trigger, 'auto')
+  assert.equal(reference.requestMode, 'edits')
+  assert.equal(reference.format, 'data_url')
+  assert.equal(reference.maxBytes, 65536)
+  assert.equal(reference.maxItems, 100)
+  assert.ok(warnings.some((warning) => warning.includes('尚未选择参考图片')))
+  assert.ok(warnings.some((warning) => warning.includes('触发关键词为空')))
+  assert.equal(JSON.stringify(publicConfig(config)).includes('apiKeyMasked'), true)
+})
+
+test('default persona is the blue whale girl preset', () => {
+  const { config } = normalizeConfig({})
+  assert.equal(config.persona.name, '鲸鱼娘')
+  assert.ok(config.persona.systemPrompt.includes('蓝色鲸鱼娘'))
+  assert.ok(config.persona.style.includes('软萌'))
+})
+
+test('output warnings cover incomplete providers and invalid extraBody JSON', () => {
+  const empty = normalizeConfig({ output: { enabled: true } })
+  assert.ok(empty.warnings.some((warning) => warning.includes('都没有启用')))
+
+  const partial = normalizeConfig({
+    output: {
+      enabled: true,
+      image: { enabled: true, baseUrl: 'https://api.example.com/v1', apiKey: '', model: 'm', extraBody: '{bad' }
+    }
+  })
+  assert.ok(partial.warnings.some((warning) => warning.includes('图片') && warning.includes('不完整')))
+  assert.ok(partial.warnings.some((warning) => warning.includes('extraBody')))
+  assert.equal(partial.config.output.image.extraBody, '{bad', 'invalid JSON is kept for the user to fix')
+})
+
+test('preserveSecret restores output keys left blank or masked by the admin page', () => {
+  const { config } = normalizeConfig({
+    output: {
+      image: { apiKey: 'sk-image' },
+      audio: { apiKey: 'sk-audio' },
+      video: { apiKey: 'sk-video' }
+    }
+  })
+  const patch = {
+    output: {
+      image: { apiKey: '', apiKeyMasked: '****', hasApiKey: true },
+      audio: { apiKey: '' },
+      video: {}
+    }
+  }
+  const next = preserveSecret(patch, config)
+  assert.equal(next.output.image.apiKey, 'sk-image')
+  assert.equal(next.output.audio.apiKey, 'sk-audio')
+  assert.equal(next.output.video.apiKey, 'sk-video')
+  assert.equal('apiKeyMasked' in next.output.image, false)
+  assert.equal('hasApiKey' in next.output.image, false)
+})
+
+test('createPaths exposes the generated-output directories', () => {
+  const paths = createPaths({ packageRoot: 'D:\\tmp\\pkg' })
+  assert.equal(paths.outputs, path.join('D:\\tmp\\pkg', 'data', 'outputs'))
+  assert.equal(paths.outputIndex, path.join('D:\\tmp\\pkg', 'data', 'outputs', 'index.json'))
+  assert.ok(paths.requiredDirs.includes(paths.outputs))
 })
 
 test('createPaths keeps data inside the package by default and maps layers', () => {

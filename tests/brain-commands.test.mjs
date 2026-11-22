@@ -67,6 +67,19 @@ function makeStickerSelector(overrides = {}) {
   }
 }
 
+function makeOutputClient(overrides = {}) {
+  return {
+    calls: [],
+    async generate(args) {
+      this.calls.push(args)
+      if (overrides.error) throw overrides.error
+      const mime = args.kind === 'image' ? 'image/png' : args.kind === 'audio' ? 'audio/mpeg' : 'video/mp4'
+      const record = { id: 'out-1', kind: args.kind, mime, filePath: `C:/tmp/out.${args.kind}`, prompt: args.prompt }
+      return { kind: args.kind, record, records: [record] }
+    }
+  }
+}
+
 function setup(overrides = {}) {
   const configStore = makeConfigStore(overrides.config ?? { commands: { adminOpenids: ['admin1'] } })
   const logger = makeLogger()
@@ -74,8 +87,9 @@ function setup(overrides = {}) {
   const memoryStore = overrides.memoryStore ?? makeMemoryStore()
   const stickerStore = overrides.stickerStore ?? makeStickerStore()
   const stickerSelector = overrides.stickerSelector ?? makeStickerSelector()
-  const handler = createCommandHandler({ configStore, budgetStore, memoryStore, stickerStore, stickerSelector, logger })
-  return { handler, configStore, logger, budgetStore, memoryStore, stickerStore, stickerSelector }
+  const outputClient = overrides.outputClient ?? makeOutputClient()
+  const handler = createCommandHandler({ configStore, budgetStore, memoryStore, stickerStore, stickerSelector, outputClient, logger })
+  return { handler, configStore, logger, budgetStore, memoryStore, stickerStore, stickerSelector, outputClient }
 }
 
 function makeInbound(overrides = {}) {
@@ -230,4 +244,111 @@ test('依赖抛错时 tryHandle 不抛异常，返回中文错误提示', async 
   assert.equal(result.handled, true)
   assert.equal(typeof result.text, 'string')
   assert.ok(result.text.includes('失败'))
+})
+
+test('#画 / #语音 / #视频：未启用、非管理员与缺参数都有明确提示', async () => {
+  const disabled = setup()
+  const off = await disabled.handler.tryHandle(makeInbound({ text: '#画 一只猫' }))
+  assert.equal(off.handled, true)
+  assert.ok(off.text.includes('还没有启用'))
+
+  const enabledConfig = {
+    commands: { adminOpenids: ['admin1'] },
+    output: {
+      enabled: true,
+      image: { enabled: true, baseUrl: 'https://api.example.com/v1', apiKey: 'k', model: 'm' }
+    }
+  }
+  const denied = await setup({ config: enabledConfig }).handler.tryHandle(makeInbound({ text: '#画 一只猫' }))
+  assert.equal(denied.handled, true)
+  assert.ok(denied.text.includes('仅管理员'))
+
+  const adminSetup = setup({ config: enabledConfig })
+  const usage = await adminSetup.handler.tryHandle(makeInbound({ text: '#画', userId: 'admin1' }))
+  assert.ok(usage.text.includes('用法'))
+  assert.equal(adminSetup.outputClient.calls.length, 0)
+})
+
+test('#画 管理员：先返回回执，followUp 生成图片并返回 media', async () => {
+  const { handler, outputClient } = setup({
+    config: {
+      commands: { adminOpenids: ['admin1'] },
+      output: {
+        enabled: true,
+        image: { enabled: true, baseUrl: 'https://api.example.com/v1', apiKey: 'k', model: 'm' }
+      }
+    }
+  })
+  const result = await handler.tryHandle(makeInbound({ text: '#画 一只在窗台上的猫', userId: 'admin1' }))
+  assert.equal(result.handled, true)
+  assert.ok(result.text.includes('正在生成图片'))
+  assert.equal(typeof result.followUp, 'function')
+  const follow = await result.followUp()
+  assert.equal(follow.media.kind, 'image')
+  assert.equal(follow.media.mime, 'image/png')
+  assert.deepEqual(outputClient.calls[0], {
+    kind: 'image',
+    prompt: '一只在窗台上的猫',
+    source: { kind: 'command', chatId: 'c2c_u1', userId: 'admin1', userName: '小明' }
+  })
+})
+
+test('#语音 / #视频 使用相同权限与 sendToQQ 开关', async () => {
+  const noSend = setup({
+    config: {
+      commands: { adminOpenids: ['admin1'] },
+      output: {
+        enabled: true,
+        sendToQQ: false,
+        audio: { enabled: true, baseUrl: 'https://api.example.com/v1', apiKey: 'k', model: 'm' },
+        video: { enabled: true, baseUrl: 'https://api.example.com/v1', apiKey: 'k', model: 'm' }
+      }
+    }
+  })
+  const voice = await noSend.handler.tryHandle(makeInbound({ text: '#语音 晚安', userId: 'admin1' }))
+  assert.ok(voice.text.includes('正在生成语音'))
+  const voiceFollow = await voice.followUp()
+  assert.equal(voiceFollow.media, undefined)
+  assert.ok(voiceFollow.text.includes('作品库'))
+
+  const video = await noSend.handler.tryHandle(makeInbound({ text: '/video 海边日落', userId: 'admin1' }))
+  assert.ok(video.text.includes('正在生成视频'))
+  const videoFollow = await video.followUp()
+  assert.ok(videoFollow.text.includes('作品库'))
+})
+
+test('生成失败时 followUp 返回可读的中文提示', async () => {
+  const { handler } = setup({
+    config: {
+      commands: { adminOpenids: ['admin1'] },
+      output: {
+        enabled: true,
+        image: { enabled: true, baseUrl: 'https://api.example.com/v1', apiKey: 'k', model: 'm' }
+      }
+    },
+    outputClient: makeOutputClient({ error: new Error('provider down') })
+  })
+  const result = await handler.tryHandle(makeInbound({ text: '#画 猫', userId: 'admin1' }))
+  const follow = await result.followUp()
+  assert.ok(follow.text.includes('生成失败'))
+  assert.ok(follow.text.includes('provider down'))
+})
+
+test('#帮助 在多模态输出启用时列出生成命令', async () => {
+  const { handler } = setup({
+    config: {
+      commands: { adminOpenids: [] },
+      output: {
+        enabled: true,
+        image: { enabled: true },
+        audio: { enabled: true },
+        video: { enabled: true }
+      }
+    }
+  })
+  const result = await handler.tryHandle(makeInbound({ text: '#帮助' }))
+  assert.ok(result.text.includes('#画'))
+  assert.ok(result.text.includes('#语音'))
+  assert.ok(result.text.includes('#视频'))
+  assert.ok(result.text.includes('管理员'))
 })

@@ -22,6 +22,9 @@
 import { buildMessages, buildSystemPrompt } from './prompt.js'
 import { clampText, parseStickerDirectives, stripMarkdown } from '../util/text.js'
 import { classifyAttachment, describeMediaMarker, describeMediaWithText } from '../util/media.js'
+import { parseOutputDirectives } from '../output/directives.js'
+import { shortMessage } from '../output/errors.js'
+import { qqFileType } from '../output/media.js'
 
 const ERROR_FALLBACK = '我这边刚刚走神了，再说一次？'
 const EMPTY_REPLY_FALLBACK = '嗯嗯～'
@@ -67,6 +70,7 @@ export function createChatEngine({
   stickerStore,
   stickerSelector,
   commandHandler,
+  outputClient,
   qqClient,
   logger,
   captureIncomingImage,
@@ -162,6 +166,60 @@ export function createChatEngine({
     }
   }
 
+  /** Upload + send one generated image / voice / video. Never throws. */
+  async function sendOutputMedia(inbound, record) {
+    if (record === null || typeof record !== 'object' || typeof record.filePath !== 'string' || record.filePath === '') {
+      logger?.warn?.('生成结果缺少本地文件，跳过发送', { chatId: inbound?.chatId, kind: record?.kind })
+      return false
+    }
+    if (typeof qqClient?.sendMedia !== 'function') {
+      logger?.warn?.('QQ 客户端不支持发送富媒体，生成结果只保存在本地', { chatId: inbound?.chatId, kind: record.kind })
+      return false
+    }
+    const fileType = qqFileType(record.kind)
+    try {
+      await qqClient.sendMedia(
+        chatRef(inbound),
+        { filePath: record.filePath, fileName: record.fileName },
+        { replyTo: replyRef(inbound), fileType }
+      )
+      return true
+    } catch (error) {
+      logger?.warn?.('发送生成的多模态内容失败', {
+        chatId: inbound?.chatId,
+        kind: record.kind,
+        error: error?.message
+      })
+      return false
+    }
+  }
+
+  /** Handle one follow-up media/text returned by a local command. */
+  async function applyFollowUp(inbound, chatId, followUp) {
+    let result
+    try {
+      result = await followUp()
+    } catch (error) {
+      logger?.warn?.('命令后续生成失败', { chatId, error: error?.message })
+      await sendText(inbound, '生成失败了，稍后再试试。')
+      return
+    }
+    if (result === null || typeof result !== 'object') return
+    if (typeof result.text === 'string' && result.text.trim() !== '') await sendText(inbound, result.text)
+    if (result.media) {
+      const sent = await sendOutputMedia(inbound, result.media)
+      if (!sent) await sendText(inbound, '生成好了，但发送失败了；可以到控制台「多模态输出」作品库查看。')
+      else {
+        await appendMessageSafe(chatId, {
+          role: 'assistant',
+          content: '[已发送生成的多模态内容]',
+          ts: Date.now(),
+          ...(result.media.id ? { outputId: result.media.id } : {})
+        })
+      }
+    }
+  }
+
   async function appendMessageSafe(chatId, message) {
     if (typeof memoryStore?.appendMessage !== 'function') return
     try {
@@ -181,7 +239,7 @@ export function createChatEngine({
     }
     const base = isPlainObject(config.persona) ? config.persona : {}
     return {
-      name: base.name ?? '小Q',
+      name: base.name ?? '鲸鱼娘',
       systemPrompt: base.systemPrompt ?? '',
       style: base.style ?? '',
       replyMaxChars: Number(base.replyMaxChars) || 800,
@@ -343,6 +401,13 @@ export function createChatEngine({
       if (commandResult?.handled === true) {
         if (typeof commandResult.text === 'string' && commandResult.text !== '') await sendText(inbound, commandResult.text)
         if (commandResult.sticker) await sendSticker(inbound, commandResult.sticker)
+        if (typeof commandResult.followUp === 'function') {
+          // Generation (especially video) may take minutes; acknowledge first
+          // and finish in the background so the per-chat queue is not blocked.
+          Promise.resolve()
+            .then(() => applyFollowUp(inbound, chatId, commandResult.followUp))
+            .catch((error) => logger?.warn?.('命令后续处理失败', { chatId, error: error?.message }))
+        }
         return
       }
     }
@@ -480,9 +545,15 @@ export function createChatEngine({
       }
     }
 
-    // 8. Sticker directives, markdown cleanup and char limit.
+    // 8. Sticker / output directives, markdown cleanup and char limit.
     const directives = parseStickerDirectives(result?.text ?? '')
-    const cleaned = stripMarkdown(directives.text)
+    const outputConfig = isPlainObject(config.output) ? config.output : {}
+    const outputEnabled = outputConfig.enabled === true && outputConfig.allowModelDirectives === true
+    const parsedOutput = parseOutputDirectives(directives.text)
+    // Always strip the markers so users never see raw `[[image: ...]]` text;
+    // only execute them when the feature is explicitly enabled.
+    const outputDirectives = { text: parsedOutput.text, requests: outputEnabled ? parsedOutput.requests : [] }
+    const cleaned = stripMarkdown(outputDirectives.text)
     const finalText = clampText(cleaned, persona.replyMaxChars)
 
     // 9. Send text first, then the sticker (best effort, degrade to text only).
@@ -495,10 +566,40 @@ export function createChatEngine({
 
     if (finalText !== '') await sendText(inbound, finalText)
     if (sticker) await sendSticker(inbound, sticker)
-    if (finalText === '' && sticker === null) await sendText(inbound, EMPTY_REPLY_FALLBACK)
+    if (finalText === '' && sticker === null && outputDirectives.requests.length === 0) await sendText(inbound, EMPTY_REPLY_FALLBACK)
+
+    // 9.1 Optional model-requested generation runs after the text reply so a
+    // slow image/video task never delays the conversation.
+    const outputRequest = Array.isArray(outputDirectives.requests) ? outputDirectives.requests[0] : null
+    if (outputRequest && typeof outputClient?.generate === 'function') {
+      Promise.resolve()
+        .then(async () => {
+          const generated = await outputClient.generate({
+            kind: outputRequest.kind,
+            prompt: outputRequest.prompt,
+            source: { kind: 'model', chatId, userId: inbound.userId, userName: inbound.userName }
+          })
+          const sent = await sendOutputMedia(inbound, generated.record)
+          if (sent) {
+            await appendMessageSafe(chatId, {
+              role: 'assistant',
+              content: '[已发送生成的多模态内容]',
+              ts: Date.now(),
+              ...(generated.record?.id ? { outputId: generated.record.id } : {})
+            })
+          } else {
+            await sendText(inbound, '生成好了，但发送失败了；可以到控制台「多模态输出」作品库查看。')
+          }
+        })
+        .catch(async (error) => {
+          logger?.warn?.('模型请求的多模态生成失败', { chatId, kind: outputRequest.kind, error: error?.message })
+          await sendText(inbound, `生成失败：${shortMessage(error?.message ?? String(error), 120)}`)
+        })
+    }
 
     // 10. Persist what the user actually saw.
-    const assistantContent = finalText !== '' ? finalText : sticker !== null ? '' : EMPTY_REPLY_FALLBACK
+    const assistantContent =
+      finalText !== '' ? finalText : sticker !== null || outputDirectives.requests.length > 0 ? '' : EMPTY_REPLY_FALLBACK
     await appendMessageSafe(chatId, {
       role: 'assistant',
       content: assistantContent,

@@ -137,6 +137,39 @@ test('sendImage：上传后发 msg_type 7，同一内容复用 file_info 缓存'
   assert.equal(api.calls.sendImage[2].msgSeq, 1)
 })
 
+test('sendMedia：按 fileType 上传语音/视频并走 msg_type 7，缓存按类型隔离', async () => {
+  const calls = { upload: [], media: [] }
+  const api = {
+    async sendText() { return { id: 'text-1' } },
+    async uploadMedia(args) {
+      calls.upload.push(args)
+      return { fileInfo: `fi-${args.fileType}`, ttl: 3600 }
+    },
+    async sendMedia(args) {
+      calls.media.push(args)
+      return { id: `m-${calls.media.length}` }
+    }
+  }
+  const sender = createSender({ api, configStore: makeConfigStore(), logger: makeLogger() })
+  const audio = await sender.sendMedia(c2c, { kind: 'audio', buffer: Buffer.from('mp3'), fileName: 'a.mp3' })
+  assert.deepEqual(audio, { id: 'm-1' })
+  assert.equal(calls.upload[0].fileType, 3)
+  assert.equal(calls.media[0].fileInfo, 'fi-3')
+
+  const video = await sender.sendMedia(c2c, { kind: 'video', buffer: Buffer.from('mp4'), fileName: 'a.mp4' })
+  assert.equal(calls.upload[1].fileType, 2)
+  assert.equal(calls.media[1].fileInfo, 'fi-2')
+  assert.equal(video.id, 'm-2')
+
+  // Same bytes but a different file type must not reuse the cached file_info.
+  await sender.sendMedia(c2c, { kind: 'image', buffer: Buffer.from('mp4'), fileName: 'a.mp4' })
+  assert.equal(calls.upload[2].fileType, 1)
+
+  const inferred = await sender.sendMedia(c2c, { mime: 'audio/wav', buffer: Buffer.from('wav'), fileName: 'b.wav' }, { fileType: 3 })
+  assert.equal(inferred.id, 'm-4')
+  assert.equal(calls.upload[3].fileType, 3)
+})
+
 test('sendImage / sendSticker 支持 filePath，并处理读取失败', async (t) => {
   const { paths, cleanup } = await makeTempPaths()
   t.after(cleanup)

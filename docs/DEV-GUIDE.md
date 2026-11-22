@@ -20,7 +20,8 @@
 - `host/util/fsx.js`：`ensureDir` `readJson` `readJsonSync` `writeJsonAtomic` `appendJsonl` `readJsonl` `listFilesRecursive` `sha256File` `sha256Buffer` `extOf` `baseName` `safeId` `moveFile` `removeFile` `pathExists` `sleep`
 - `host/util/text.js`：`estimateTokens` `estimateMessagesTokens` `chunkText` `stripMarkdown` `parseStickerDirectives` `normalizeTags` `mergeTags` `parseCommand` `escapeRegExp` `formatDateTime` `formatDate` `formatMonth` `maskSecret` `shortTitle` `isLikelyImageContentType` `clampText`
 - `host/util/log.js`：`createLogger({file, ctxLogger, maxLines, debug})`（模块里只使用注入的 `logger`，不要自己创建）
-- `host/config.js`：`DEFAULT_CONFIG` `normalizeConfig` `patchConfig` `loadConfig` `saveConfig` `publicConfig` `hasCredentials`
+- `host/config.js`：`DEFAULT_CONFIG` `normalizeConfig` `patchConfig` `loadConfig` `saveConfig` `publicConfig` `preserveSecret` `hasCredentials`
+- `host/output/`：`createOutputStore({paths, configStore, logger})`、`createOutputClient({configStore, store, logger, fetchImpl})`、`parseOutputDirectives(text)`、`buildOutputInstruction({output})`；协议与错误码见 `docs/INTERFACES.md` §19
 
 ## 4. 错误处理
 

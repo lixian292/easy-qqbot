@@ -60,7 +60,7 @@ test('buildSystemPrompt 在表情包关闭或目录为空时不输出表情包�
 test('buildSystemPrompt 缺省值可用（空 config / 空 facts）', () => {
   const prompt = buildSystemPrompt({ config: {}, now: 0 })
   assert.ok(typeof prompt === 'string')
-  assert.ok(prompt.includes('小Q'))
+  assert.ok(prompt.includes('鲸鱼娘'))
   assert.ok(!prompt.includes('长期记忆'))
 })
 
@@ -154,4 +154,29 @@ test('单聊或发言者事实为空时不输出群成员记忆段', () => {
     speakerFacts: ['喜欢猫']
   })
   assert.ok(noName.includes('【当前群成员「当前发言者」的长期记忆】'))
+})
+
+test('多模态输出指令只在启用且允许模型指令时进入提示词', () => {
+  const disabled = buildSystemPrompt({
+    config: makeConfig({
+      output: { enabled: true, allowModelDirectives: false, image: { enabled: true } }
+    })
+  })
+  assert.equal(disabled.includes('【多模态输出】'), false)
+
+  const enabled = buildSystemPrompt({
+    config: makeConfig({
+      output: {
+        enabled: true,
+        allowModelDirectives: true,
+        image: { enabled: true },
+        audio: { enabled: false },
+        video: { enabled: true }
+      }
+    })
+  })
+  assert.ok(enabled.includes('【多模态输出】'))
+  assert.ok(enabled.includes('[[image:'))
+  assert.ok(enabled.includes('[[video:'))
+  assert.equal(enabled.includes('[[voice:'), false)
 })

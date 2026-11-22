@@ -216,12 +216,12 @@ export function buildStickerInstruction({ stickerCatalog, stickerChance })
 ## 8. host/brain/commands.js
 
 ```js
-export function createCommandHandler({ configStore, budgetStore, memoryStore, stickerStore, stickerSelector, logger })
+export function createCommandHandler({ configStore, budgetStore, memoryStore, stickerStore, stickerSelector, outputClient, logger })
 ```
 
 | 方法 | 说明 |
 |---|---|
-| `async tryHandle(inbound)` | 识别命令并返回 `{handled:true, text?:string, sticker?:StickerItem}`；非命令返回 `{handled:false}` |
+| `async tryHandle(inbound)` | 识别命令并返回 `{handled:true, text?:string, sticker?:StickerItem, followUp?:Function}`；非命令返回 `{handled:false}`。`followUp()` 可返回 `{text?, media?}`，由聊天引擎在发送回执后异步执行（用于图片/语音/视频生成） |
 
 命令（大小写不敏感；前缀取 `config.commands.prefix`，默认 `#`，同时兼容 `/`、`／`）：
 
@@ -232,6 +232,7 @@ export function createCommandHandler({ configStore, budgetStore, memoryStore, st
 - `#记忆`：列出本会话长期事实（最多 10 条），无则提示。
 - `#状态` / `#status`：管理员命令（`config.commands.adminOpenids` 包含 userId，或群 `memberRole` 为 owner/admin 且 `allowGroupOwner` 打开），返回连接状态摘要（由 `ctx` 无关的轻量信息组成：预算、会话数、表情包数）。
 - `#表情包统计`：管理员命令，返回各图层数量与标签 TopN。
+- `#画 <描述>` / `#语音 <文本>` / `#视频 <描述>`：多模态输出（需 `output.enabled` 与对应模态启用；`output.commandAccess='admin'` 时仅管理员可用）。先返回回执 `text`，`followUp()` 调 `outputClient.generate()`，成功返回 `{media: record}`，`sendToQQ=false` 或格式不支持时返回 `{text}`。
 - 未知命令返回 `{handled:false}`（交给 LLM 正常回答，避免群里误拦截）。
 
 ## 9. host/brain/chat.js
@@ -240,7 +241,7 @@ export function createCommandHandler({ configStore, budgetStore, memoryStore, st
 export function createChatEngine({
   configStore, personaStore, memoryStore, budgetStore, llmClient,
   compressor, extractor, stickerStore, stickerSelector, commandHandler,
-  qqClient, logger, captureIncomingImage, describeIncomingMedia
+  outputClient, qqClient, logger, captureIncomingImage, describeIncomingMedia
 })
 ```
 
@@ -254,15 +255,15 @@ export function createChatEngine({
 
 处理流程（严格按此实现，便于测试）：
 
-1. `commandHandler.tryHandle(inbound)`；handled 则发 text/sticker 后返回。
+1. `commandHandler.tryHandle(inbound)`；handled 则发 text/sticker，并在后台执行 `followUp()`（生成媒体通过 `qqClient.sendMedia()` 发送），随后返回。
 2. 入站媒体：图片在 `config.stickers.enabled && config.stickers.captureIncoming` 时调用 `captureIncomingImage` 入候选库；对所有 image/audio/video 附件调用 `describeIncomingMedia`，用 `describeMediaMarker` / `describeMediaWithText` 生成 `[图片...]` / `[语音]` / `[视频...]` 标记并写入用户消息内容。
 3. `budgetStore.check({chatId, userId})`；`allowed=false` 时：若距上次提示超过 `budget.blockCooldownMs`，发 `config.budget.blockMessage`；把用户消息与提示写入 memory；返回。
 4. `memoryStore.appendMessage(chatId, {role:'user', content, ts, userId, userName, msgId})`。
 5. 压缩：若 `persona.compressEnabled` → `compressor.maybeCompress(chatId)`。
 6. 组装：`history = memoryStore.history(chatId, persona.maxHistoryMessages)`；facts = chat.facts；群聊额外 `memoryStore.getChatMember(chatId, inbound.userId)` 取当前发言者 facts/name；summary；stickerCatalog；`buildSystemPrompt({..., speakerFacts, speakerName, isGroupChat})`。
 7. `llmClient.complete()`；成功 → `budgetStore.record()`；失败 → 记 warn，发一次兜底错误文案，返回。
-8. 解析 `parseStickerDirectives(text)`；清理 Markdown → `stripMarkdown`；截断到 `persona.replyMaxChars`。
-9. 发送：先文字（如果有），再表情包：显式指令优先 `stickerSelector.pickForReply(tags)`；否则按 `stickerChance` 在回复文本命中标签时 `stickerSelector.maybeStickerFromText()`；发送失败降级为纯文字。
+8. 解析 `parseStickerDirectives(text)`，再解析 `parseOutputDirectives(text)`（始终剥离标记）；清理 Markdown → `stripMarkdown`；截断到 `persona.replyMaxChars`。
+9. 发送：先文字（如果有），再表情包：显式指令优先 `stickerSelector.pickForReply(tags)`；否则按 `stickerChance` 在回复文本命中标签时 `stickerSelector.maybeStickerFromText()`；发送失败降级为纯文字。`output.enabled && output.allowModelDirectives` 时，后台执行第一条 `[[image/voice/video: ...]]` 指令生成并发送，失败只回文字提示。
 10. `memoryStore.appendMessage(chatId, {role:'assistant', content: finalText, ts})`。
 11. 异步（不 await，catch 后仅记日志）：`extractor.maybeExtract({ chatId, speaker: { userId, name, isGroup } })`。
 
@@ -332,9 +333,10 @@ export class QQApiError extends Error { code; status; errCode; traceId }
 | `async getToken({ force=false } = {})` | POST `{apiBase}{tokenPath}`，body `{appId, clientSecret}`；缓存 token 到提前 60s 过期；返回 `{accessToken, expiresIn, fetchedAt}`。失败抛 QQApiError（含 err_code）。 |
 | `async request({ method='GET', path, query, body, auth=true, timeoutMs=15000 })` | 统一请求：`Authorization: QQBot <token>`，JSON 解析；HTTP 非 2xx 或 body 有 `err_code` 非 0 时抛 QQApiError（保留 code/status/traceId）。204 返回 `{}`。 |
 | `async getGatewayUrl()` | GET `{gatewayPath}` → `url` 字符串 |
-| `async uploadMedia({ kind, targetId, buffer, fileName, fileType=1 })` | POST `/v2/{groups|users}/{targetId}/files`，body `{file_type, file_name, file_data: base64}`；返回 `{fileInfo, fileUuid, ttl, rawUrl}`。>5MB 抛错 `MEDIA_TOO_LARGE`。 |
+| `async uploadMedia({ kind, targetId, buffer, fileName, fileType=1 })` | POST `/v2/{groups|users}/{targetId}/files`，body `{file_type, file_name, file_data: base64}`；`file_type`: 1 图片 / 2 视频 / 3 语音 / 4 文件；返回 `{fileInfo, fileUuid, ttl, rawUrl}`。>5MB 抛错 `MEDIA_TOO_LARGE`。 |
 | `async sendText({ kind, targetId, content, msgId, msgSeq, eventId })` | POST `/v2/{groups|users}/{targetId}/messages` body `{msg_type:0, content, ...(msgId?{msg_id,msg_seq}:{}) , ...(eventId?{event_id}:{})}`；返回响应。 |
-| `async sendImage({ kind, targetId, fileInfo, msgId, msgSeq })` | POST 同上 body `{msg_type:7, media:{file_info}, ...}` |
+| `async sendMedia({ kind, targetId, fileInfo, msgId, msgSeq })` | POST 同上 body `{msg_type:7, media:{file_info}, ...}`，图片/语音/视频通用。 |
+| `async sendImage({ kind, targetId, fileInfo, msgId, msgSeq })` | `sendMedia` 的兼容别名。 |
 | `async getBotMe()` | GET `/users/@me`，返回 bot 信息；失败返回 null |
 | `invalidateToken()` | 清缓存 |
 
@@ -364,7 +366,8 @@ export function chatTarget(chat) // chat: {kind, targetId}
 | 方法 | 说明 |
 |---|---|
 | `async sendText(chat, text, { replyTo } = {})` | 清洗 Markdown、按 `config.qq.textChunkSize` 分片；每片更新 msg_seq；`replyTo = {msgId, receivedAt, kind}` 在窗口内且次数未超时带 `msg_id/msg_seq` 被动回复，否则主动消息（不带 msg_id）。返回 `{ ids: string[], passive: boolean }` |
-| `async sendImage(chat, { buffer } \| { filePath }, { replyTo } = {})` | 上传 → `file_info` 缓存（同 target+内容指纹+ttl）→ 发 msg_type 7；返回 `{ id }` |
+| `async sendImage(chat, { buffer } \| { filePath }, { replyTo } = {})` | 上传 → `file_info` 缓存（同 target+fileType+内容指纹+ttl）→ 发 msg_type 7；返回 `{ id }` |
+| `async sendMedia(chat, media, { replyTo, fileType } = {})` | 通用富媒体发送；`fileType`: 1 图片 / 2 视频 / 3 语音；未传时按 `media.kind`/mime 推断；缓存按 fileType 隔离 |
 | `async sendSticker(chat, stickerItem, { replyTo } = {})` | 读取 `stickerStore.filePath`（由调用方传 `{filePath}` 更简单：`sendSticker(chat, {filePath, id}, {replyTo})`） |
 | `async sendTyping(chat)` | 可选（c2c msg_type 6，失败静默） |
 
@@ -407,7 +410,7 @@ export function createQQClient({ ctx, configStore, logger, onInbound })
 | `async stop()` | 停止并对 sender 内部缓存清理 |
 | `async restart()` | 用于配置保存后：stop → 重新读取配置 → start |
 | `status()` | gateway 状态 + `{enabled, hasCredentials, sent, received, lastInboundAt, bot}` |
-| `async sendText(chat, text, opts)` / `async sendImage(chat, media, opts)` / `async sendSticker(chat, sticker, opts)` | 委托 sender；未连接时抛 `Error('QQ bot is not connected')` |
+| `async sendText(chat, text, opts)` / `async sendImage(chat, media, opts)` / `async sendMedia(chat, media, opts)` / `async sendSticker(chat, sticker, opts)` | 委托 sender；`sendMedia` 的 `opts.fileType` 为 1/2/3；未连接时抛 `Error('QQ bot is not connected')` |
 | `async testAuth()` | 取 token + gateway url，返回 `{ ok, tokenExpiresIn, gatewayUrl, bot? }`（不打印 token） |
 | `async sendTyping(chat)` | 可选透传 |
 
@@ -416,11 +419,57 @@ export function createQQClient({ ctx, configStore, logger, onInbound })
 ## 18. Admin（Lead 实现，仅说明依赖关系）
 
 管理后台是 `host/admin/**`，通过 `host/app.js` 注入以下对象，不直接 import 其他模块内部文件：
-`{ ctx, paths, configStore, qqClient, llmClient, budgetStore, personaStore, memoryStore, stickerStore, importer, selector, chatEngine, logger, version }`。
+`{ ctx, paths, configStore, qqClient, llmClient, budgetStore, personaStore, memoryStore, stickerStore, importer, selector, outputStore, referenceStore, outputClient, chatEngine, logger, version }`。
 
 暴露 HTTP：`GET <admin.path>`（页面）、`GET <admin.path>/assets/*`（静态）、`GET <admin.path>/media/sticker/<id>`（图片）、`POST <admin.path>/api`（`{method,args}` → `{ok,result|error}`，同源校验）。
 
-## 19. 测试要求（每个人）
+## 19. host/output/*（多模态输出）
+
+```js
+export function createOutputStore({ paths, configStore, logger })
+export function createReferenceStore({ paths, configStore, logger })
+export function createOutputClient({ configStore, store, referenceStore, logger, fetchImpl })
+export function parseOutputDirectives(text)
+export function buildOutputInstruction({ output })
+export function resolveApiUrl(baseUrl, path)
+export class OutputError extends Error { code; status; cause? }
+```
+
+`OutputRecord = { id, kind:'image'|'audio'|'video', ext, mime, size, prompt, provider, model, durationMs, createdAt, source, referenceId? }`；`store.add()` 额外返回内部 `filePath`，管理 API 必须剥离。
+
+`ReferenceRecord = { id, ext, mime, size, originalName, createdAt }`；索引 `data/references/index.json`，文件 `data/references/<id>.<ext>`，`referenceStore.add/list/get/remove/filePath/flush`，`add` 会校验图片格式与 `output.image.reference.maxBytes`，超过 `maxItems` 时删除最旧图片。
+
+| store 方法 | 说明 |
+|---|---|
+| `async init()` | 载入 `data/outputs/index.json`；损坏时备份 `.corrupt-*` 并重建为空库 |
+| `async add({ kind, buffer, mime, ext?, prompt?, provider?, model?, durationMs?, source? })` | 写文件 + 索引；按 `output.maxItems` / `output.retentionDays` 清理旧作品 |
+| `async list({ kind?, limit=30, offset=0 })` | `{ total, items }`，新→旧 |
+| `async get(id)` / `filePath(recordOrId)` | 读取索引项 / 本地绝对路径 |
+| `async remove(id)` / `async clear({ kind? })` | 删除单个 / 批量删除文件与索引 |
+| `stats()` | `{ total, byKind:{image,audio,video}, bytes, latestAt }` |
+| `async flush()` | 等待写入队列 |
+
+`OutputClient`：
+
+| 方法 | 说明 |
+|---|---|
+| `status()` | 脱敏状态：`{enabled, sendToQQ, commandAccess, allowModelDirectives, image/audio/video:{enabled,configured,model,baseUrl,path,...}}` |
+| `async test({ kind })` | `GET {base}/models` 检查 URL/鉴权/模型（不生成）；404/405/501 软通过为 `mode:'config-only'` |
+| `async generate({ kind, prompt, source?, signal? })` | 校验开关/配置/提示词，调用对应协议，结果写入 store；返回 `{kind, records, record}`；失败抛 `OutputError` |
+| `dotGet(value, path)` | 点路径读取（支持 `a.b.0.c` / `a[0].c`），供测试与自定义视频字段 |
+
+协议：
+- URL 拼接：`resolveApiUrl(baseUrl, path)`；Base URL 无路径且 path 是 OpenAI 标准端点时自动插入 `/v1`，并折叠重复 `/v1`。`status()` 返回每个模态的 `requestUrl` / `modelsUrl`，便于 UI 显示实际请求地址；`test()` 遇 HTML 响应抛 `HTML_RESPONSE`，不再把服务商网页当 API。
+- image：`POST {image.baseUrl}{image.path}`，body `{model,prompt,sizeField,countField?,response_format?,quality?,style?,...extraBody}`；`countField`（`n` / `batch_size`）只在 `image.count > 1` 时发送，单张生成不发送冗余的 `n:1`；解析 `data[]` / `images[]` 的 `b64_json|url`。
+- 角色参考：`output.image.reference.enabled` 为真且 prompt 命中角色名 / `keywords`（或 `trigger=always`）时，读取当前 `reference.id` 图片：
+  - `requestMode=edits` → multipart `POST {reference.path}`，字段名 `reference.field`（默认 `image`）；
+  - `requestMode=generations` → 在普通图片请求体里加 `reference.field`，值为 data URL 或纯 base64；
+  - 使用参考图时 prompt 前追加 `reference.promptPrefix`；成功记录带 `referenceId`；
+  - 失败且 `reference.fallbackToText=true` 时回退纯文生图，否则抛错。缺当前参考图抛 `REFERENCE_MISSING`。
+- audio：`POST {audio.baseUrl}{audio.path}`，body `{model,input,voice,response_format,speed,...extraBody}`；二进制或 JSON(base64/url)。
+- video：`preset='siliconflow'` 固定 `/video/submit` + `/video/status`；`preset='openai'` 固定 `/videos` + `/videos/{id}` + `/content`；`preset='custom'` 使用 `createPath/queryPath/queryMethod/idField/statusField/resultField/successValues/failureValues`，轮询间隔 `pollIntervalMs`、上限 `maxWaitMs`。
+
+## 20. 测试要求（每个人）
 
 - 用 `node --test tests/<你的前缀>-*.test.mjs`，不联网、不依赖真实 QQ。
 - 覆盖：正常路径 + 至少 2 个错误/边界路径。

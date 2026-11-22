@@ -23,7 +23,7 @@ window.__ModuleLoader__.load({
       zh: {
         'entry.title': 'QQ 机器人',
         'page.title': 'QQ 机器人',
-        'page.subtitle': '预算 · 记忆 · 个性化 · 表情包',
+        'page.subtitle': '蓝色鲸鱼娘 · 预算 · 记忆 · 表情包 · 多模态',
         'page.back': '回到对话',
         'page.refresh': '刷新',
         'page.openConsole': '打开完整控制台',
@@ -38,6 +38,9 @@ window.__ModuleLoader__.load({
         'status.budgetToday': '今日预算',
         'status.stickers': '表情包',
         'status.chats': '会话 / 人员',
+        'status.output': '多模态输出',
+        'output.adminOnly': '仅管理员',
+        'output.allUsers': '所有用户',
         'status.dataDir': '数据目录',
         'status.online': '在线',
         'status.offline': '离线',
@@ -59,7 +62,7 @@ window.__ModuleLoader__.load({
         'tokens': 'tokens',
         'budgetUnlimited': '不限',
         'footer.version': '版本',
-        'footer.hint': '完整控制台包含表情包打标、预算明细、会话记忆与日志。',
+        'footer.hint': '完整控制台包含多模态输出、表情包打标、预算明细、会话记忆与日志。',
         'console.title': 'QQ 机器人控制台',
         'console.overview': '概览',
         'console.reload': '刷新页面',
@@ -69,7 +72,7 @@ window.__ModuleLoader__.load({
       en: {
         'entry.title': 'QQ Bot',
         'page.title': 'QQ Bot',
-        'page.subtitle': 'Budget · Memory · Persona · Stickers',
+        'page.subtitle': 'Blue whale girl · Budget · Memory · Stickers · Multimodal',
         'page.back': 'Back to chat',
         'page.refresh': 'Refresh',
         'page.openConsole': 'Open full console',
@@ -84,6 +87,9 @@ window.__ModuleLoader__.load({
         'status.budgetToday': 'Budget today',
         'status.stickers': 'Stickers',
         'status.chats': 'Chats / people',
+        'status.output': 'Multimodal output',
+        'output.adminOnly': 'admin only',
+        'output.allUsers': 'all users',
         'status.dataDir': 'Data directory',
         'status.online': 'online',
         'status.offline': 'offline',
@@ -105,7 +111,7 @@ window.__ModuleLoader__.load({
         'tokens': 'tokens',
         'budgetUnlimited': 'unlimited',
         'footer.version': 'Version',
-        'footer.hint': 'The full console manages sticker tagging, budgets, chat memory and logs.',
+        'footer.hint': 'The full console manages multimodal output, sticker tagging, budgets, chat memory and logs.',
         'console.title': 'QQ bot console',
         'console.overview': 'Overview',
         'console.reload': 'Reload page',
@@ -403,6 +409,8 @@ window.__ModuleLoader__.load({
       const status = data?.status ?? {}
       const budget = data?.budget ?? {}
       const stickers = data?.stickers ?? {}
+      const output = data?.output ?? null
+      const outputs = data?.outputs ?? null
       const limits = budget?.limits ?? {}
       const today = budget?.today ?? {}
       const dailyLimit = Number(limits.dailyTokens)
@@ -476,6 +484,16 @@ window.__ModuleLoader__.load({
                 ),
                 h(StatCard, { label: t('status.bot'), value: status.bot?.username ?? '—', meta: status.bot?.id ? `id ${status.bot.id}` : null }),
                 h(StatCard, { label: t('status.llm'), value: data.llm?.model ?? '—', meta: data.llm?.provider ?? null }),
+                h(
+                  StatCard,
+                  {
+                    label: t('status.output'),
+                    value: output?.enabled ? `${outputs?.total ?? 0}` : '—',
+                    meta: output?.enabled
+                      ? `${['image', 'audio', 'video'].filter((kind) => output[kind]?.enabled && output[kind]?.configured).length}/3 · ${output.commandAccess === 'all' ? t('output.allUsers') : t('output.adminOnly')}`
+                      : t('status.standby')
+                  }
+                ),
                 h(
                   StatCard,
                   { label: t('status.budgetToday'), value: `${formatNumber(today.totalTokens)} ${t('tokens')}`, meta: dailyLimit > 0 ? `${formatNumber(today.totalTokens)} / ${formatNumber(dailyLimit)}` : t('budgetUnlimited') },

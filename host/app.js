@@ -13,6 +13,9 @@ import { createMemoryExtractor } from './memory/extract.js'
 import { createCompressor } from './memory/compress.js'
 import { createLlmClient } from './brain/llm.js'
 import { createMultimodalClient } from './multimodal/client.js'
+import { createOutputStore } from './output/store.js'
+import { createReferenceStore } from './output/reference-store.js'
+import { createOutputClient } from './output/client.js'
 import { downloadMediaBuffer } from './multimodal/download.js'
 import { attachmentAsrText, classifyAttachment, mediaDownloadUrl } from './util/media.js'
 import { createStickerStore } from './stickers/store.js'
@@ -23,7 +26,7 @@ import { createChatEngine } from './brain/chat.js'
 import { createQQClient } from './qq/index.js'
 import { registerAdminRoutes } from './admin/routes.js'
 
-export const PLUGIN_VERSION = '0.2.0'
+export const PLUGIN_VERSION = '0.3.0'
 
 /**
  * In-memory config controller: `loadConfig` at startup, atomic `saveConfig` for
@@ -90,6 +93,19 @@ function sanitizeConfigPatch(patch) {
     delete multimodal.hasApiKey
     if (keyMissing) delete multimodal.apiKey
     out.multimodal = multimodal
+  }
+  if (out.output !== null && typeof out.output === 'object') {
+    const output = { ...out.output }
+    for (const kind of ['image', 'audio', 'video']) {
+      if (output[kind] === null || typeof output[kind] !== 'object') continue
+      const section = { ...output[kind] }
+      const keyMissing = section.apiKey === undefined || section.apiKey === ''
+      delete section.apiKeyMasked
+      delete section.hasApiKey
+      if (keyMissing) delete section.apiKey
+      output[kind] = section
+    }
+    out.output = output
   }
   return out
 }
@@ -182,13 +198,22 @@ export async function createApp({ ctx, version = PLUGIN_VERSION } = {}) {
   const llmService = resolveService(ctx, 'llm')
   const llmClient = createLlmClient({ ctx: { llm: llmService }, configStore, logger })
   const multimodalClient = createMultimodalClient({ configStore, logger })
+  const outputStore = createOutputStore({ paths, configStore, logger })
+  const referenceStore = createReferenceStore({ paths, configStore, logger })
+  const outputClient = createOutputClient({ configStore, store: outputStore, referenceStore, logger })
   const stickerStore = createStickerStore({ paths, configStore, logger })
   const importer = createStickerImporter({ paths, configStore, stickerStore, logger })
   const stickerSelector = createStickerSelector({ stickerStore, configStore, logger })
   const compressor = createCompressor({ configStore, llmClient, memoryStore, logger })
   const extractor = createMemoryExtractor({ configStore, llmClient, memoryStore, logger })
 
-  await Promise.allSettled([personaStore.init?.(), memoryStore.init?.(), stickerStore.init?.()])
+  await Promise.allSettled([
+    personaStore.init?.(),
+    memoryStore.init?.(),
+    stickerStore.init?.(),
+    outputStore.init?.(),
+    referenceStore.init?.()
+  ])
 
   const chatQueue = createSerialQueue({ logger })
   const contextInfo = {
@@ -203,6 +228,7 @@ export async function createApp({ ctx, version = PLUGIN_VERSION } = {}) {
     memoryStore,
     stickerStore,
     stickerSelector,
+    outputClient,
     logger,
     context: contextInfo
   })
@@ -286,6 +312,7 @@ export async function createApp({ ctx, version = PLUGIN_VERSION } = {}) {
     stickerStore,
     stickerSelector,
     commandHandler,
+    outputClient,
     qqClient,
     logger,
     describeIncomingMedia,
@@ -314,6 +341,9 @@ export async function createApp({ ctx, version = PLUGIN_VERSION } = {}) {
     memoryStore,
     llmClient,
     multimodalClient,
+    outputStore,
+    referenceStore,
+    outputClient,
     stickerStore,
     importer,
     stickerSelector,
@@ -356,7 +386,14 @@ export async function createApp({ ctx, version = PLUGIN_VERSION } = {}) {
       logger.warn('停止 QQ 连接失败', error)
     }
     try {
-      await Promise.allSettled([budgetStore.flush?.(), memoryStore.flush?.(), personaStore.flush?.(), stickerStore.flush?.()])
+      await Promise.allSettled([
+        budgetStore.flush?.(),
+        memoryStore.flush?.(),
+        personaStore.flush?.(),
+        stickerStore.flush?.(),
+        outputStore.flush?.(),
+        referenceStore.flush?.()
+      ])
     } catch {}
     await logger.flush?.()
   }
