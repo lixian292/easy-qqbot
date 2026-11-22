@@ -216,6 +216,7 @@ export function createChatEngine({
           role: 'assistant',
           content: '[已发送生成的多模态内容]',
           ts: Date.now(),
+          internal: 'output-sent',
           ...(result.media.id ? { outputId: result.media.id } : {})
         })
       }
@@ -603,6 +604,7 @@ export function createChatEngine({
               role: 'assistant',
               content: '[已发送生成的多模态内容]',
               ts: Date.now(),
+              internal: 'output-sent',
               ...(generated.record?.id ? { outputId: generated.record.id } : {})
             })
           } else {

@@ -89,10 +89,66 @@ function mergeUsage(previous, raw) {
   return merged
 }
 
+function textOfContent(content) {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .map((block) => {
+      if (typeof block === 'string') return block
+      if (!isPlainObject(block)) return ''
+      return typeof block.text === 'string' ? block.text : ''
+    })
+    .join('')
+}
+
+/** OpenAI-compatible /chat/completions endpoint derived from a base URL. */
+function resolveChatCompletionsUrl(baseUrl) {
+  const value = String(baseUrl ?? '').trim().replace(/\/+$/, '')
+  if (value === '') return ''
+  if (/\/chat\/completions$/i.test(value)) return value
+  if (/\/v1$/i.test(value)) return value + '/chat/completions'
+  try {
+    const parsed = new URL(value)
+    if (parsed.pathname === '' || parsed.pathname === '/') return parsed.origin + '/v1/chat/completions'
+  } catch {
+    // fall through to a best-effort suffix
+  }
+  return value + '/chat/completions'
+}
+
+/** Build plain OpenAI messages (system folded to the front) from contract messages. */
+function buildDirectMessages(system, messages) {
+  const systemParts = []
+  const converted = []
+  const addSystem = (value) => {
+    if (typeof value === 'string' && value.trim() !== '') systemParts.push(value)
+  }
+  addSystem(system)
+  for (const message of Array.isArray(messages) ? messages : []) {
+    if (!isPlainObject(message)) continue
+    const content = textOfContent(message.content)
+    if (content.trim() === '') continue
+    if (message.role === 'system') {
+      addSystem(content)
+      continue
+    }
+    if (message.role !== 'user' && message.role !== 'assistant') continue
+    converted.push({ role: message.role, content })
+  }
+  if (systemParts.length > 0) converted.unshift({ role: 'system', content: systemParts.join('\n\n') })
+  return converted
+}
+
+function errorSnippet(text, max = 300) {
+  const value = String(text ?? '').replace(/\s+/g, ' ').trim()
+  if (value === '') return ''
+  return value.length > max ? value.slice(0, max) + '…' : value
+}
+
 /**
- * @param {{ ctx?: object, configStore?: { get(): object }, logger?: object }} deps
+ * @param {{ ctx?: object, configStore?: { get(): object }, logger?: object, fetchImpl?: typeof fetch }} deps
  */
-export function createLlmClient({ ctx, configStore, logger } = {}) {
+export function createLlmClient({ ctx, configStore, logger, fetchImpl } = {}) {
   function readConfig() {
     let config
     try {
@@ -102,6 +158,128 @@ export function createLlmClient({ ctx, configStore, logger } = {}) {
       config = {}
     }
     return isPlainObject(config) ? config : {}
+  }
+
+  /**
+   * Direct OpenAI-compatible chat completion. Used only when `llm.baseUrl` is
+   * configured; otherwise the DSH-managed `ctx.llm.stream()` path is used.
+   */
+  async function completeDirect({
+    baseUrl,
+    apiKey,
+    provider,
+    model,
+    system,
+    messages,
+    maxTokens,
+    temperature,
+    purpose,
+    signal,
+    timeoutMs
+  }) {
+    const fetchFn = typeof fetchImpl === 'function' ? fetchImpl : globalThis.fetch
+    if (typeof fetchFn !== 'function') {
+      throw new LlmCallError('LLM 直连不可用：当前环境没有 fetch', { code: 'LLM_UNAVAILABLE' })
+    }
+    if (signal?.aborted) {
+      throw new LlmCallError('模型请求已取消', { code: 'ABORTED' })
+    }
+    const url = resolveChatCompletionsUrl(baseUrl)
+    if (url === '') throw new LlmCallError('LLM Base URL 无效', { code: 'LLM_UNAVAILABLE' })
+    const directMessages = buildDirectMessages(system, messages)
+    if (directMessages.length === 0) throw new LlmCallError('没有可发送的对话消息', { code: 'INVALID_REQUEST' })
+
+    const controller = new AbortController()
+    let abortReason = null
+    let rejectAbort = null
+    const abortPromise = new Promise((_resolve, reject) => {
+      rejectAbort = reject
+    })
+    const onAbort = () => {
+      const code = abortReason === 'timeout' ? 'TIMEOUT' : 'ABORTED'
+      rejectAbort(new LlmCallError(abortReason === 'timeout' ? '模型请求超时' : '模型请求已取消', { code }))
+    }
+    controller.signal.addEventListener('abort', onAbort, { once: true })
+    const onExternalAbort = () => {
+      if (abortReason === null) abortReason = 'external'
+      controller.abort()
+    }
+    if (signal && typeof signal.addEventListener === 'function') signal.addEventListener('abort', onExternalAbort, { once: true })
+    const timer = setTimeout(() => {
+      abortReason = 'timeout'
+      controller.abort()
+    }, timeoutMs)
+
+    const headers = { 'content-type': 'application/json' }
+    if (typeof apiKey === 'string' && apiKey !== '') headers.authorization = `Bearer ${apiKey}`
+    const body = {
+      model,
+      messages: directMessages,
+      temperature,
+      max_tokens: maxTokens,
+      stream: false
+    }
+    logger?.debug?.('调用直连 LLM', { provider, model, purpose: purpose ?? 'chat', timeoutMs, url, messageCount: directMessages.length })
+
+    try {
+      const request = (async () => {
+        const response = await fetchFn(url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body),
+          signal: controller.signal
+        })
+        const text = await response.text()
+        return { response, text }
+      })()
+      const { response, text } = await Promise.race([request, abortPromise])
+      if (!response.ok) {
+        const code = response.status === 401 || response.status === 403 ? 'AUTH' : `HTTP_${response.status}`
+        const detail = errorSnippet(text)
+        throw new LlmCallError(
+          `模型接口 HTTP ${response.status}${detail === '' ? '' : `：${detail}`}`,
+          { code }
+        )
+      }
+      let data
+      try {
+        data = JSON.parse(text)
+      } catch {
+        throw new LlmCallError('模型接口返回的不是 JSON', { code: 'INVALID_RESPONSE' })
+      }
+      const choice = Array.isArray(data?.choices) ? data.choices[0] : null
+      const content = textOfContent(choice?.message?.content)
+      if (content.trim() === '') throw new LlmCallError('模型没有返回内容', { code: 'EMPTY_RESPONSE' })
+      const rawUsage = isPlainObject(data?.usage) ? data.usage : {}
+      const inputTokens = numberOrZero(rawUsage.prompt_tokens ?? rawUsage.input_tokens ?? rawUsage.inputTokens)
+      const outputTokens = numberOrZero(rawUsage.completion_tokens ?? rawUsage.output_tokens ?? rawUsage.outputTokens)
+      const finishKind = typeof choice?.finish_reason === 'string' && choice.finish_reason !== '' ? choice.finish_reason : 'stop'
+      logger?.debug?.('直连 LLM 调用完成', { provider, model, purpose: purpose ?? 'chat', finishKind, inputTokens, outputTokens })
+      return {
+        text: content,
+        usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens },
+        provider,
+        model,
+        finishKind
+      }
+    } catch (error) {
+      if (error instanceof LlmCallError) throw error
+      if (abortReason !== null) {
+        const code = abortReason === 'timeout' ? 'TIMEOUT' : 'ABORTED'
+        throw new LlmCallError(abortReason === 'timeout' ? '模型请求超时' : '模型请求已取消', { code, cause: error })
+      }
+      if (error?.name === 'AbortError') {
+        throw new LlmCallError('模型请求已取消', { code: 'ABORTED', cause: error })
+      }
+      const rawCode = typeof error?.code === 'string' ? error.code.trim() : ''
+      const code = /^[A-Za-z0-9_.-]{1,64}$/.test(rawCode) ? rawCode : 'NETWORK'
+      const detail = typeof error?.message === 'string' && error.message !== '' ? error.message : '未知错误'
+      throw new LlmCallError(`模型接口调用失败：${detail}`, { code, cause: error })
+    } finally {
+      clearTimeout(timer)
+      controller.signal.removeEventListener('abort', onAbort)
+      if (signal && typeof signal.removeEventListener === 'function') signal.removeEventListener('abort', onExternalAbort)
+    }
   }
 
   /**
@@ -137,6 +315,22 @@ export function createLlmClient({ ctx, configStore, logger } = {}) {
           : DEFAULT_MODEL
     const timeoutCandidate = Number(llmConfig.timeoutMs)
     const timeoutMs = Number.isFinite(timeoutCandidate) && timeoutCandidate > 0 ? timeoutCandidate : DEFAULT_TIMEOUT_MS
+    const directBaseUrl = typeof llmConfig.baseUrl === 'string' ? llmConfig.baseUrl.trim() : ''
+    if (directBaseUrl !== '') {
+      return completeDirect({
+        baseUrl: directBaseUrl,
+        apiKey: typeof llmConfig.apiKey === 'string' ? llmConfig.apiKey : '',
+        provider,
+        model,
+        system: String(system ?? ''),
+        messages,
+        maxTokens: maxTokens ?? (Number.isFinite(Number(llmConfig.maxTokens)) ? Number(llmConfig.maxTokens) : DEFAULT_MAX_TOKENS),
+        temperature: temperature ?? (Number.isFinite(Number(llmConfig.temperature)) ? Number(llmConfig.temperature) : DEFAULT_TEMPERATURE),
+        purpose,
+        signal,
+        timeoutMs
+      })
+    }
 
     const streamFn = ctx?.llm?.stream
     if (typeof streamFn !== 'function') {

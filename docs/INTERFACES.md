@@ -194,16 +194,16 @@ export function createCompressor({ configStore, memoryStore, llmClient, logger }
 ## 6. host/brain/llm.js
 
 ```js
-export function createLlmClient({ ctx, configStore, logger })
+export function createLlmClient({ ctx, configStore, logger, fetchImpl })
 export class LlmCallError extends Error { code: string; cause?: unknown }
 ```
 
 | 方法 | 说明 |
 |---|---|
-| `async complete({ system, messages, maxTokens?, temperature?, purpose?, signal? })` | messages: `[{role:'user'\|'assistant'\|'system', content: string}]`。调用 `ctx.llm.stream({provider, model, system, messages, temperature, maxTokens, ...(purpose?{purpose}:{}), signal})`，收集 `text-delta`/`block-end` 文本、`usage` 分片、`finish` 分片，返回 `LlmResult`。失败 finish 或抛异常 → 抛 `LlmCallError`（code 取 failure.code，缺省 `LLM_ERROR`）。超时用 `config.llm.timeoutMs` 触发 AbortController（外部 signal 也要联动）。空文本视为 `EMPTY_RESPONSE`。 |
+| `async complete({ system, messages, maxTokens?, temperature?, purpose?, signal? })` | messages: `[{role:'user'\|'assistant'\|'system', content: string}]`。默认调用 `ctx.llm.stream({provider, model, system, messages, temperature, maxTokens, ...(purpose?{purpose}:{}), signal})`，收集 `text-delta`/`block-end` 文本、`usage` 分片、`finish` 分片，返回 `LlmResult`。若 `config.llm.baseUrl` 非空，则改走直连 OpenAI 兼容 `POST <baseUrl>/chat/completions`（`Authorization: Bearer <llm.apiKey>`，可留空用于本地服务），解析 `choices[0].message.content` 与 `usage.prompt_tokens/completion_tokens`；HTTP 401/403 → `AUTH`，其他非 2xx → `HTTP_<status>`，非 JSON → `INVALID_RESPONSE`，网络错误 → `NETWORK`。两条路径都受 `config.llm.timeoutMs` 与外部 signal 控制。空文本视为 `EMPTY_RESPONSE`。 |
 | `async test({ prompt='你好' } = {})` | 便捷自检：`complete({system:'你是连通性测试助手，只回复一行。', messages:[{role:'user',content:prompt}], maxTokens:64})` |
 
-注意：DeepSeek 适配器要求 assistant 消息带 `source: { kind:'model', provider, model }`；转换时补上，user 消息不需要。chunk 形状：`{type:'text-delta',text}`、`{type:'block-end',block:{type:'text',text}}`、`{type:'usage',usage:{...}}`、`{type:'finish',reason:{kind}}`。
+注意：DSH 流式路径要求 assistant 消息带 `source: { kind:'model', provider, model }`；转换时补上，user 消息不需要。chunk 形状：`{type:'text-delta',text}`、`{type:'block-end',block:{type:'text',text}}`、`{type:'usage',usage:{...}}`、`{type:'finish',reason:{kind}}`。
 
 ## 7. host/brain/prompt.js（纯函数）
 

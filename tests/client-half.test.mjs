@@ -182,6 +182,8 @@ test('admin console exposes task-oriented navigation and feature-owned settings'
   assert.ok(app.includes("api('output.test'"), 'output interface test must call output.test')
   assert.ok(app.includes("api('output.history'"), 'output history must call output.history')
   assert.ok(app.includes('function filterSettingsFields('), 'settings fields must be searchable')
+  assert.ok(app.includes("path: 'llm.baseUrl'"), 'optional direct LLM base URL must be configurable')
+  assert.ok(app.includes("path: 'llm.apiKey'"), 'optional direct LLM API key must be configurable')
   assert.ok(app.includes('data-output-kind'), 'output kind tabs must be wired')
   assert.ok(app.includes('outputReferencePanel'), 'character reference panel must be rendered')
   assert.ok(app.includes("api('output.reference.list'"), 'reference list API must be wired')

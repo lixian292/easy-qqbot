@@ -116,6 +116,25 @@ test('buildMessages 过滤空内容与非法角色，空历史时仍可只发用
   assert.deepEqual(buildMessages({ history: [] }), [])
 })
 
+test('buildMessages 不把内部媒体发送标记喂回模型', () => {
+  const messages = buildMessages({
+    history: [
+      { role: 'user', content: '来张自拍' },
+      { role: 'assistant', content: '好呀', internal: 'output-sent', outputId: 'o1' },
+      { role: 'assistant', content: '[已发送生成的多模态内容]' },
+      { role: 'assistant', content: '画好啦\n\n[已发送生成的多模态内容]' },
+      { role: 'assistant', content: '夸夸我嘛' }
+    ],
+    userMessage: '在吗'
+  })
+  assert.deepEqual(messages, [
+    { role: 'user', content: '来张自拍' },
+    { role: 'assistant', content: '画好啦' },
+    { role: 'assistant', content: '夸夸我嘛' },
+    { role: 'user', content: '在吗' }
+  ])
+})
+
 test('群聊 buildSystemPrompt 追加当前发言者的长期记忆段', () => {
   const prompt = buildSystemPrompt({
     config: makeConfig(),

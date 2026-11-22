@@ -335,7 +335,8 @@
     { nav: 'chats', label: '会话记忆', desc: '历史、摘要、长期事实与人设覆盖', icon: '▣' },
     { nav: 'people', label: '人员画像', desc: '查看群成员与用户的长期事实', icon: '☷' },
     { nav: 'multimodal', section: 'input', label: '多模态识别', desc: '让机器人看懂图片 / 听懂语音', icon: '◉' },
-    { nav: 'dialog', section: 'persona', label: '对话设置', desc: '人设、模型、记忆与命令权限', icon: '☺' },
+    { nav: 'dialog', section: 'model', label: '模型与 API', desc: 'DSH 提供方或直连 OpenAI 兼容接口', icon: '◈' },
+    { nav: 'dialog', section: 'persona', label: '对话设置', desc: '人设、记忆与命令权限', icon: '☺' },
     { nav: 'system', section: 'qq', label: '系统设置', desc: 'QQ 接入、管理后台与日志', icon: '⚙' },
     { nav: 'logs', label: '运行日志', desc: '排查连接、生成与发送问题', icon: '≡' }
   ];
@@ -1245,9 +1246,11 @@
       group: '对话',
       page: 'config',
       title: 'LLM 模型',
-      hint: '使用 DSH 已配置的模型提供方；模型名需与提供方一致。',
+      hint: '默认使用 DSH 已配置的模型提供方；填写 API Base URL 后改为直连 OpenAI 兼容 /chat/completions（本地服务可不填 API Key）。',
       fields: [
-        { path: 'llm.provider', label: 'Provider', type: 'text', placeholder: 'deepseek-official' },
+        { path: 'llm.baseUrl', label: 'API Base URL（可选）', type: 'text', wide: true, placeholder: 'https://api.openai.com/v1', hint: '留空 = 使用 DSH 的模型提供方；填写后直连该地址的 /chat/completions' },
+        { path: 'llm.apiKey', label: 'API Key（可选）', type: 'secret', secretOf: 'llm' },
+        { path: 'llm.provider', label: 'Provider / 来源标签', type: 'text', placeholder: 'deepseek-official' },
         { path: 'llm.model', label: '模型', type: 'text', placeholder: 'deepseek-flash' },
         { path: 'llm.temperature', label: '温度', type: 'number', min: 0, max: 2, step: 0.05 },
         { path: 'llm.maxTokens', label: '最大输出 tokens', type: 'number', min: 64, max: 32768 },
@@ -1419,7 +1422,7 @@
           hint: '生成会调用第三方接口并产生费用；开放给所有用户前请确认预算与风控'
         },
         { path: 'output.sendToQQ', label: '生成后发送到 QQ', type: 'bool', hint: '关闭时只保存到作品库，不占用 QQ 富媒体上传额度' },
-        { path: 'output.allowModelDirectives', label: '允许模型主动生成', type: 'bool', hint: '开启后模型可在回复里使用 [[image: ...]] / [[voice: ...]] / [[video: ...]] 指令；每次最多一个' },
+        { path: 'output.allowModelDirectives', label: '允许模型主动生成', type: 'bool', hint: '关闭时模型回复里的 [[image: ...]] / [[voice: ...]] / [[video: ...]] 标签会被剥离，只保留文字；开启后仍受聊天命令权限约束，每次最多一个' },
         { path: 'output.promptPrefix', label: '统一提示词前缀', type: 'textarea', wide: true, rows: 2, hint: '附加在图片/视频提示词前面；语音输出不追加' },
         { path: 'output.timeoutMs', label: '单次请求超时 (ms)', type: 'number', min: 5000, max: 600000 },
         { path: 'output.maxBytes', label: '单个结果最大字节', type: 'number', min: 65536, max: 209715200, hint: '默认 33554432（32 MiB）；超过的结果不会保存' },

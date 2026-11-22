@@ -258,6 +258,27 @@ test('output warnings cover incomplete providers and invalid extraBody JSON', ()
   assert.equal(partial.config.output.image.extraBody, '{bad', 'invalid JSON is kept for the user to fix')
 })
 
+test('LLM direct config is optional, masks the key and preserves it on blank saves', () => {
+  const { config } = normalizeConfig({
+    llm: { baseUrl: 'https://api.example.com/v1/', apiKey: 'sk-llm', model: 'gpt-4o-mini' }
+  })
+  assert.equal(config.llm.baseUrl, 'https://api.example.com/v1')
+  assert.equal(config.llm.apiKey, 'sk-llm')
+  const pub = publicConfig(config)
+  assert.equal(pub.llm.apiKey, '')
+  assert.equal(pub.llm.hasApiKey, true)
+  assert.equal(pub.llm.apiKeyMasked.includes('sk-llm'), false)
+  const next = preserveSecret({ llm: { apiKey: '', apiKeyMasked: '****', hasApiKey: true } }, config)
+  assert.equal(next.llm.apiKey, 'sk-llm')
+  assert.equal('apiKeyMasked' in next.llm, false)
+  assert.equal('hasApiKey' in next.llm, false)
+
+  const fallback = normalizeConfig({ llm: { baseUrl: 'javascript:alert(1)' } }).config
+  assert.equal(fallback.llm.baseUrl, '', 'invalid direct base URL falls back to DSH provider')
+  const noKey = normalizeConfig({ llm: { baseUrl: 'https://api.example.com/v1' } })
+  assert.ok(noKey.warnings.some((warning) => warning.includes('llm.baseUrl') && warning.includes('apiKey')))
+})
+
 test('preserveSecret restores output keys left blank or masked by the admin page', () => {
   const { config } = normalizeConfig({
     output: {

@@ -61,6 +61,67 @@ test('complete 收集 text-delta / usage / finish，并从配置读取 provider/
   assert.ok(options.signal instanceof AbortSignal)
 })
 
+test('llm.baseUrl 直连 OpenAI 兼容接口，解析消息、usage 与 finish', async () => {
+  const calls = []
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init })
+    return {
+      ok: true,
+      status: 200,
+      async text() {
+        return JSON.stringify({
+          choices: [{ message: { content: '直连回复' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 7, completion_tokens: 3 }
+        })
+      }
+    }
+  }
+  const configStore = makeConfigStore({
+    llm: { baseUrl: 'https://api.example.com/v1', apiKey: 'sk-direct', model: 'gpt-4o-mini', temperature: 0.2, maxTokens: 128 }
+  })
+  const client = createLlmClient({ ctx: {}, configStore, fetchImpl })
+  const result = await client.complete({
+    system: '系统提示',
+    messages: [
+      { role: 'user', content: '你好' },
+      { role: 'assistant', content: '在的' }
+    ]
+  })
+  assert.equal(result.text, '直连回复')
+  assert.equal(result.provider, 'deepseek-official')
+  assert.equal(result.model, 'gpt-4o-mini')
+  assert.equal(result.finishKind, 'stop')
+  assert.deepEqual(result.usage, { inputTokens: 7, outputTokens: 3, totalTokens: 10 })
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].url, 'https://api.example.com/v1/chat/completions')
+  assert.equal(calls[0].init.headers.authorization, 'Bearer sk-direct')
+  const body = JSON.parse(calls[0].init.body)
+  assert.equal(body.model, 'gpt-4o-mini')
+  assert.equal(body.stream, false)
+  assert.equal(body.max_tokens, 128)
+  assert.deepEqual(body.messages[0], { role: 'system', content: '系统提示' })
+  assert.deepEqual(body.messages.slice(1), [
+    { role: 'user', content: '你好' },
+    { role: 'assistant', content: '在的' }
+  ])
+})
+
+test('直连接口 401 映射为 AUTH，非 JSON 响应映射为 INVALID_RESPONSE', async () => {
+  const unauthorized = createLlmClient({
+    ctx: {},
+    configStore: makeConfigStore({ llm: { baseUrl: 'https://api.example.com/v1', apiKey: 'bad' } }),
+    fetchImpl: async () => ({ ok: false, status: 401, async text() { return 'invalid api key' } })
+  })
+  await assert.rejects(unauthorized.complete({ messages: [{ role: 'user', content: 'hi' }] }), isLlmError('AUTH'))
+
+  const html = createLlmClient({
+    ctx: {},
+    configStore: makeConfigStore({ llm: { baseUrl: 'https://api.example.com/v1' } }),
+    fetchImpl: async () => ({ ok: true, status: 200, async text() { return '<html>not json</html>' } })
+  })
+  await assert.rejects(html.complete({ messages: [{ role: 'user', content: 'hi' }] }), isLlmError('INVALID_RESPONSE'))
+})
+
 test('complete 尊重 temperature / maxTokens 覆盖', async () => {
   const fake = makeFakeCtxLlm({ text: 'ok' })
   const client = createLlmClient({ ctx: wrapCtx(fake), configStore: makeConfigStore() })

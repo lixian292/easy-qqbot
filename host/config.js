@@ -37,6 +37,10 @@ export const DEFAULT_CONFIG = Object.freeze({
     }
   },
   llm: {
+    // Empty baseUrl keeps using the DSH-managed provider (ctx.llm.stream).
+    // Filling it switches chat calls to a direct OpenAI-compatible endpoint.
+    baseUrl: '',
+    apiKey: '',
     provider: 'deepseek-official',
     model: 'deepseek-flash',
     temperature: 0.8,
@@ -329,6 +333,8 @@ export function normalizeConfig(raw) {
       }
     },
     llm: {
+      baseUrl: optionalHttpBase(llm.baseUrl),
+      apiKey: stringField(llm.apiKey, defaults.llm.apiKey, { maxLength: 512 }),
       provider: stringField(llm.provider, defaults.llm.provider, { allowEmpty: false, maxLength: 128 }),
       model: stringField(llm.model, defaults.llm.model, { allowEmpty: false, maxLength: 128 }),
       temperature: numberField(llm.temperature, defaults.llm.temperature, { min: 0, max: 2 }),
@@ -496,6 +502,9 @@ export function normalizeConfig(raw) {
   if (config.qq.appId === '' || config.qq.appSecret === '') {
     warnings.push('qq.appId / qq.appSecret 尚未填写，插件会以「待配置」状态启动，不会连接 QQ')
   }
+  if (config.llm.baseUrl !== '' && config.llm.apiKey === '') {
+    warnings.push('llm.baseUrl 已启用直连，但 llm.apiKey 为空；仅本地无鉴权服务可这样使用')
+  }
   if (config.multimodal.enabled) {
     if (config.multimodal.baseUrl === '' || config.multimodal.apiKey === '') {
       warnings.push('multimodal.enabled 已开启，但 baseUrl / apiKey 不完整；多模态识别会被跳过')
@@ -607,6 +616,12 @@ export function publicConfig(config) {
       appSecretMasked: maskSecret(config.qq.appSecret),
       hasSecret: config.qq.appSecret !== ''
     },
+    llm: {
+      ...clone(config.llm),
+      apiKey: '',
+      apiKeyMasked: maskSecret(config.llm.apiKey),
+      hasApiKey: config.llm.apiKey !== ''
+    },
     multimodal: {
       ...clone(config.multimodal),
       apiKey: '',
@@ -626,6 +641,12 @@ export function preserveSecret(next, previous) {
   }
   delete patch.qq.appSecretMasked
   delete patch.qq.hasSecret
+  if (!isPlainObject(patch.llm)) patch.llm = {}
+  if (patch.llm.apiKey === undefined || patch.llm.apiKey === '' || patch.llm.apiKeyMasked !== undefined) {
+    patch.llm.apiKey = isPlainObject(previous.llm) ? previous.llm.apiKey : ''
+  }
+  delete patch.llm.apiKeyMasked
+  delete patch.llm.hasApiKey
   if (!isPlainObject(patch.output)) patch.output = {}
   const previousOutput = isPlainObject(previous.output) ? previous.output : {}
   for (const kind of ['image', 'audio', 'video']) {

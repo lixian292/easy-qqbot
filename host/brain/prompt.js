@@ -142,8 +142,13 @@ export function buildMessages({ history, userMessage, maxMessages } = {}) {
   for (const message of Array.isArray(history) ? history : []) {
     if (!isPlainObject(message)) continue
     if (message.role !== 'user' && message.role !== 'assistant') continue
-    const content = String(message.content ?? '').trim()
+    // Internal delivery markers are for the admin history only. Feeding them
+    // back to the model made it imitate the marker and append it to replies;
+    // old histories may have the marker merged into the assistant text, so
+    // strip it while keeping the real sentence.
+    const content = String(message.content ?? '').replaceAll('[已发送生成的多模态内容]', '').trim()
     if (content === '') continue
+    if (message.internal === 'output-sent') continue
     converted.push({ role: message.role, content })
   }
 
