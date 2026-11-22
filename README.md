@@ -75,38 +75,38 @@
 
 ![QQ Bot 控制台概览：分组导航、快捷入口与状态卡](images/console.jpg)
 
-### 多模态输出与角色形象参考
-
-![多模态输出：接口配置、生成试跑与聊天命令](images/output-1.jpg)
+### 对话设置与命令权限
 
 <p>
-  <img src="images/output-2.jpg" alt="角色形象参考：上传参考图、触发词与图片接口配置" width="49%" />
-  <img src="images/output-3.jpg" alt="视频输出配置与最近生成作品库" width="49%" />
+  <img src="images/dialog.jpg" alt="对话 → 人设：名字、系统提示、风格与记忆设置" width="49%" />
+  <img src="images/commands.jpg" alt="对话 → 命令与权限；管理员 openid 已做隐私处理" width="49%" />
+</p>
+
+### 多模态：识别与输出
+
+![多模态识别：图片 / 语音 / 视频理解接口配置](images/multimodal-input.jpg)
+
+<p>
+  <img src="images/output-1.jpg" alt="多模态输出：状态卡、输出总开关与接口配置" width="49%" />
+  <img src="images/output-2.jpg" alt="图片输出与角色形象参考图" width="49%" />
 </p>
 
 ### 表情包打标（核心页面）
 
 ![表情包工作台：图层、标签筛选与批量打标](images/stickers.jpg)
 
-### 会话记忆与上下文
+### 预算与限额
+
+![预算仪表盘：用量、限额、按会话与最近调用](images/budget.jpg)
+
+### 群聊会话与成员记忆
 
 ![群聊会话：上下文摘要、按成员 ID 分组的长期事实与历史消息](images/chat.jpg)
 
-### 预算与对话设置
+### 系统设置与运行日志
 
 <p>
-  <img src="images/budget.jpg" alt="预算仪表盘" width="49%" />
-  <img src="images/config.jpg" alt="对话设置页：人设、模型、记忆与命令权限子标签" width="49%" />
-</p>
-
-### 对话模型与 API 接入
-
-![对话模型：DSH 提供方或直连 OpenAI 兼容 Base URL / API Key](images/model-api.jpg)
-
-### 记忆与压缩、运行日志
-
-<p>
-  <img src="images/memory.jpg" alt="对话 → 记忆与压缩设置页" width="49%" />
+  <img src="images/system.jpg" alt="系统设置：QQ 接入、管理员凭据与应用参数" width="49%" />
   <img src="images/logs.jpg" alt="运行日志与连接诊断" width="49%" />
 </p>
 
