@@ -140,32 +140,48 @@ test('client half opens the console inside the app and can return without reload
   assert.ok(!/https?:\/\//.test(source.replace(/http:\/\/127\.0\.0\.1:1/g, '')), 'client half must not hardcode remote URLs')
 })
 
-test('admin console exposes grouped navigation, config search and the output module', () => {
+test('admin console exposes task-oriented navigation and feature-owned settings', () => {
   const html = fs.readFileSync(new URL('../host/admin/ui/index.html', import.meta.url), 'utf8')
   const app = fs.readFileSync(new URL('../host/admin/ui/app.js', import.meta.url), 'utf8')
   for (const id of [
     'appSidebar',
     'sideNav',
     'navSearch',
-    'panel-output',
+    'panel-dialog',
+    'panel-multimodal',
+    'panel-stickers',
+    'panel-budget',
+    'panel-system',
+    'tabs-dialog',
+    'tabs-multimodal',
+    'settings-dialog-persona',
+    'settings-dialog-commands',
+    'settings-multimodal-input',
+    'settings-stickers-settings',
+    'settings-budget-settings',
+    'settings-system-qq',
+    'settings-system-admin',
+    'settings-system-logging',
     'outputCards',
     'outputConfig',
     'outputHistory',
     'outputKindTabs',
-    'configNav',
-    'configSearch',
     'quickNav'
   ]) {
     assert.ok(html.includes(`id="${id}"`), `index.html must contain #${id}`)
   }
+  assert.ok(!html.includes('id="panel-config"'), 'the global all-config page must be gone')
+  assert.ok(!html.includes('id="panel-output"'), 'output must be a sub-tab of multimodal')
   assert.ok(app.includes('var NAV_GROUPS'), 'navigation must be grouped')
+  assert.ok(app.includes('var PAGE_TABS'), 'page-local sub-tabs must be defined')
+  assert.ok(app.includes('var SETTINGS_FORMS'), 'settings must be owned by feature pages')
   assert.ok(app.includes("data-nav-link"), 'quick links must be able to navigate')
   assert.ok(app.includes('function navigate('), 'hash navigation helper is required')
-  assert.ok(app.includes('function loadOutputPage('), 'output page loader is required')
+  assert.ok(app.includes('function loadOutputPage('), 'output loader is required')
   assert.ok(app.includes("api('output.generate'"), 'output playground must call output.generate')
   assert.ok(app.includes("api('output.test'"), 'output interface test must call output.test')
   assert.ok(app.includes("api('output.history'"), 'output history must call output.history')
-  assert.ok(app.includes('function filterConfigFields('), 'config fields must be searchable')
+  assert.ok(app.includes('function filterSettingsFields('), 'settings fields must be searchable')
   assert.ok(app.includes('data-output-kind'), 'output kind tabs must be wired')
   assert.ok(app.includes('outputReferencePanel'), 'character reference panel must be rendered')
   assert.ok(app.includes("api('output.reference.list'"), 'reference list API must be wired')

@@ -3002,3 +3002,110 @@ button.output-item-media:focus-visible {
   padding: 4px 9px 9px;
   justify-content: flex-end;
 }
+
+/* ---------- page-local sub-tabs & settings forms ---------- */
+.page-tabs {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin: 0 0 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.page-tab {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-soft);
+  font: inherit;
+  font-size: 12.8px;
+  font-weight: 500;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+}
+
+.page-tab:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.page-tab.is-active {
+  color: var(--accent);
+  background: var(--accent-weak);
+  border-color: transparent;
+}
+
+.sub-panel {
+  display: none;
+}
+
+.sub-panel.is-active {
+  display: block;
+  animation: panel-in 0.16s ease;
+}
+
+.settings-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 2px 0 12px;
+}
+
+.settings-toolbar .config-search {
+  flex: 1 1 260px;
+  max-width: 390px;
+}
+
+.settings-form .warning-list {
+  margin-bottom: 14px;
+}
+
+.settings-form .form-section:last-child {
+  margin-bottom: 0;
+}
+
+.compact-notice {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+}
+
+.output-toolbar {
+  align-items: flex-start;
+  margin-top: 0;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px dashed var(--border);
+}
+
+.output-toolbar p {
+  margin-top: 3px;
+}
+
+@media (max-width: 720px) {
+  .page-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .page-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .page-tab {
+    flex: none;
+  }
+
+  .settings-toolbar {
+    align-items: stretch;
+  }
+
+  .settings-toolbar .btn,
+  .settings-toolbar .config-search {
+    max-width: none;
+  }
+}

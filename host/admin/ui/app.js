@@ -235,64 +235,108 @@
     video: '海边日落，镜头缓慢向前推进，暖色调'
   };
 
-  // Navigation is grouped by user task instead of a flat tab strip: each item
-  // may point at a config section so the large settings form is reachable in
-  // one click. `desc` doubles as the nav search text.
+  // Top-level navigation is task-oriented. Configuration lives with the feature
+  // it belongs to (no global "all config" page and no duplicated parent/child
+  // config items). Pages that need multiple facets expose local sub-tabs, and
+  // every sub-tab is addressable through the hash route (#/page/subtab).
   var NAV_GROUPS = [
     {
       title: '运行',
       items: [{ id: 'overview', label: '概览', desc: '状态、警告与快捷入口', icon: '◎' }]
     },
     {
-      title: '智能能力',
+      title: '智能与内容',
       items: [
-        { id: 'output', label: '多模态输出', desc: '图片 / 语音 / 视频生成与接口配置', icon: '✦' },
-        { id: 'config', section: 'multimodal', label: '多模态识别', desc: '图片 / 语音 / 视频理解（输入）', icon: '◉' },
-        { id: 'config', section: 'llm', label: '对话模型', desc: 'Provider / 模型 / 温度', icon: '◈' },
-        { id: 'config', section: 'persona', label: '人设', desc: '名字 / 系统提示 / 说话风格', icon: '☺' },
-        { id: 'config', section: 'memory', label: '记忆与压缩', desc: '长期事实、摘要与上下文长度', icon: '▤' }
+        { id: 'dialog', label: '对话', desc: '人设 / 模型 / 记忆 / 命令权限', icon: '☺' },
+        { id: 'multimodal', label: '多模态', desc: '识别（输入）与生成（输出）', icon: '✦' },
+        { id: 'stickers', label: '表情包', desc: '图库打标与行为设置', icon: '❏' }
       ]
     },
     {
-      title: '聊天运营',
+      title: '运营',
       items: [
-        { id: 'budget', label: '预算', desc: '今日 / 本月用量、限额与明细', icon: '¥' },
-        { id: 'chats', label: '会话', desc: '历史消息、摘要、人设覆盖', icon: '▣' },
+        { id: 'budget', label: '预算', desc: '用量明细与限额设置', icon: '¥' },
+        { id: 'chats', label: '会话', desc: '历史、摘要与长期事实', icon: '▣' },
         { id: 'people', label: '人员', desc: '用户画像与长期事实', icon: '☷' }
       ]
     },
     {
-      title: '内容',
-      items: [{ id: 'stickers', label: '表情包', desc: '导入、打标、图层与聊天挑选', icon: '❏' }]
-    },
-    {
       title: '系统',
       items: [
-        { id: 'config', label: '全部配置', desc: 'QQ 接入、命令、管理员与日志', icon: '⚙' },
-        { id: 'logs', label: '日志', desc: '最近运行日志与调试', icon: '≡' }
+        { id: 'system', label: '系统设置', desc: 'QQ 接入、管理后台、日志与调试', icon: '⚙' },
+        { id: 'logs', label: '运行日志', desc: '最近运行日志与排查', icon: '≡' }
       ]
     }
   ];
 
   var PAGE_META = {
     overview: { group: '运行', title: '概览', desc: '运行状态与快捷入口' },
-    output: { group: '智能能力', title: '多模态输出', desc: '图片 / 语音 / 视频生成' },
-    config: { group: '系统', title: '全部配置', desc: '按分区管理插件配置' },
-    stickers: { group: '内容', title: '表情包', desc: '导入、打标与图层' },
-    budget: { group: '聊天运营', title: '预算', desc: '用量、限额与调用明细' },
-    chats: { group: '聊天运营', title: '会话', desc: '历史、摘要与记忆' },
-    people: { group: '聊天运营', title: '人员', desc: '用户画像与事实' },
-    logs: { group: '系统', title: '日志', desc: '最近运行日志' }
+    dialog: { group: '智能与内容', title: '对话', desc: '人设、模型、记忆与命令权限' },
+    multimodal: { group: '智能与内容', title: '多模态', desc: '识别输入与生成输出' },
+    stickers: { group: '智能与内容', title: '表情包', desc: '图库打标与行为设置' },
+    budget: { group: '运营', title: '预算', desc: '用量与限额' },
+    chats: { group: '运营', title: '会话', desc: '历史、摘要与记忆' },
+    people: { group: '运营', title: '人员', desc: '用户画像与事实' },
+    system: { group: '系统', title: '系统设置', desc: 'QQ 接入、管理后台与日志' },
+    logs: { group: '系统', title: '运行日志', desc: '最近运行日志' }
   };
 
+  var DEFAULT_SUBTAB = {
+    dialog: 'persona',
+    multimodal: 'input',
+    stickers: 'library',
+    budget: 'usage',
+    system: 'qq'
+  };
+
+  var PAGE_TABS = {
+    dialog: [
+      { key: 'persona', label: '人设', sections: ['persona'] },
+      { key: 'model', label: '模型与回复', sections: ['llm'] },
+      { key: 'memory', label: '记忆与压缩', sections: ['memory'] },
+      { key: 'commands', label: '命令与权限', sections: ['commands'] }
+    ],
+    multimodal: [
+      { key: 'input', label: '识别（输入）', sections: ['multimodal'] },
+      { key: 'output', label: '输出（图片 / 语音 / 视频）' }
+    ],
+    stickers: [
+      { key: 'library', label: '图库与打标' },
+      { key: 'settings', label: '行为设置', sections: ['stickers'] }
+    ],
+    budget: [
+      { key: 'usage', label: '用量明细' },
+      { key: 'settings', label: '限额与设置', sections: ['budget'] }
+    ],
+    system: [
+      { key: 'qq', label: 'QQ 接入', sections: ['qq'] },
+      { key: 'admin', label: '管理后台', sections: ['admin'] },
+      { key: 'logging', label: '日志与调试', sections: ['logging'] }
+    ]
+  };
+
+  var SETTINGS_FORMS = [
+    { container: 'settings-dialog-persona', sections: ['persona'] },
+    { container: 'settings-dialog-model', sections: ['llm'] },
+    { container: 'settings-dialog-memory', sections: ['memory'] },
+    { container: 'settings-dialog-commands', sections: ['commands'] },
+    { container: 'settings-multimodal-input', sections: ['multimodal'] },
+    { container: 'settings-stickers-settings', sections: ['stickers'] },
+    { container: 'settings-budget-settings', sections: ['budget'] },
+    { container: 'settings-system-qq', sections: ['qq'] },
+    { container: 'settings-system-admin', sections: ['admin'] },
+    { container: 'settings-system-logging', sections: ['logging'] }
+  ];
+
   var QUICK_LINKS = [
-    { nav: 'output', label: '多模态输出', desc: '配置图片 / 语音 / 视频接口并试跑', icon: '✦' },
-    { nav: 'stickers', label: '表情包打标', desc: '导入图片、打标签、转入正式库', icon: '❏' },
-    { nav: 'budget', label: '预算与用量', desc: '查看限额、消耗与最近调用', icon: '¥' },
+    { nav: 'multimodal', section: 'output', label: '多模态输出', desc: '配置图片 / 语音 / 视频接口并试跑', icon: '✦' },
+    { nav: 'stickers', section: 'library', label: '表情包打标', desc: '导入图片、打标签、转入正式库', icon: '❏' },
+    { nav: 'budget', section: 'usage', label: '预算与用量', desc: '查看限额、消耗与最近调用', icon: '¥' },
     { nav: 'chats', label: '会话记忆', desc: '历史、摘要、长期事实与人设覆盖', icon: '▣' },
     { nav: 'people', label: '人员画像', desc: '查看群成员与用户的长期事实', icon: '☷' },
-    { nav: 'config', section: 'multimodal', label: '多模态识别', desc: '让机器人看懂图片 / 听懂语音', icon: '◉' },
-    { nav: 'config', label: '全部配置', desc: 'QQ 接入、命令、管理员与系统项', icon: '⚙' },
+    { nav: 'multimodal', section: 'input', label: '多模态识别', desc: '让机器人看懂图片 / 听懂语音', icon: '◉' },
+    { nav: 'dialog', section: 'persona', label: '对话设置', desc: '人设、模型、记忆与命令权限', icon: '☺' },
+    { nav: 'system', section: 'qq', label: '系统设置', desc: 'QQ 接入、管理后台与日志', icon: '⚙' },
     { nav: 'logs', label: '运行日志', desc: '排查连接、生成与发送问题', icon: '≡' }
   ];
 
@@ -337,7 +381,7 @@
   var state = {
     booted: false,
     tab: 'overview',
-    configSection: '',
+    subtab: '',
     navQuery: '',
     pollTimer: 0,
     snapshot: null,
@@ -655,14 +699,67 @@
     badge.innerHTML = '<span class="dot"></span><span>' + esc(label) + '</span>';
   }
 
-  var TAB_NAMES = ['overview', 'output', 'config', 'stickers', 'budget', 'chats', 'people', 'logs'];
+  var TAB_NAMES = ['overview', 'dialog', 'multimodal', 'stickers', 'budget', 'chats', 'people', 'system', 'logs'];
 
   // ---------------------------------------------------------------------------
-  // Grouped sidebar navigation / hash routing
+  // Top-level navigation + page-local sub-tab routing / hash routing
   // ---------------------------------------------------------------------------
+  var LEGACY_ROUTES = {
+    config: {
+      '': ['system', 'qq'],
+      qq: ['system', 'qq'],
+      llm: ['dialog', 'model'],
+      persona: ['dialog', 'persona'],
+      multimodal: ['multimodal', 'input'],
+      memory: ['dialog', 'memory'],
+      budget: ['budget', 'settings'],
+      stickers: ['stickers', 'settings'],
+      commands: ['dialog', 'commands'],
+      logging: ['system', 'logging'],
+      output: ['multimodal', 'output']
+    },
+    output: { '': ['multimodal', 'output'] }
+  };
+
+  function normalizeSubtab(tab, subtab) {
+    var tabs = PAGE_TABS[tab];
+    if (!tabs || tabs.length === 0) return '';
+    var wanted = typeof subtab === 'string' ? subtab : '';
+    for (var i = 0; i < tabs.length; i += 1) {
+      if (tabs[i].key === wanted) return wanted;
+    }
+    return DEFAULT_SUBTAB[tab] || tabs[0].key;
+  }
+
+  function sectionSearchText(section) {
+    if (!section) return '';
+    return String(section.title + ' ' + (section.hint || '') + ' ' + section.fields.map(function (field) {
+      return field.label + ' ' + field.path;
+    }).join(' '));
+  }
+
+  function pageSettingsSearchText(page) {
+    var terms = [];
+    (PAGE_TABS[page] || []).forEach(function (tab) {
+      (tab.sections || []).forEach(function (key) {
+        terms.push(sectionSearchText(findConfigSection(key)));
+      });
+    });
+    if (page === 'multimodal') {
+      configSections('output').forEach(function (section) {
+        terms.push(sectionSearchText(section));
+      });
+    }
+    if (page === 'stickers') terms.push('导入 上传 扫描 import 打标 图层 回收站');
+    return terms.join(' ');
+  }
+
   function navItemSearchText(item, group) {
-    var section = item.section ? ' config ' + item.section + ' ' : ' ';
-    return String((group ? group.title + ' ' : '') + item.label + ' ' + item.desc + ' ' + item.id + section).toLowerCase();
+    var tabs = PAGE_TABS[item.id] || [];
+    var tabText = tabs.map(function (tab) { return item.label + tab.label + ' ' + tab.label; }).join(' ');
+    return String(
+      (group ? group.title + ' ' : '') + item.label + ' ' + item.desc + ' ' + item.id + ' ' + tabText + ' ' + pageSettingsSearchText(item.id)
+    ).toLowerCase();
   }
 
   function renderSideNav() {
@@ -670,9 +767,8 @@
     if (!nav) return;
     nav.innerHTML = NAV_GROUPS.map(function (group) {
       var items = group.items.map(function (item) {
-        var sectionAttr = item.section ? ' data-config-section="' + esc(item.section) + '"' : '';
         return (
-          '<button type="button" class="nav-item" data-nav="' + esc(item.id) + '"' + sectionAttr +
+          '<button type="button" class="nav-item" data-nav="' + esc(item.id) + '"' +
           ' data-search="' + esc(navItemSearchText(item, group)) + '" title="' + esc(item.label + '：' + item.desc) + '">' +
           '<span class="nav-ico" aria-hidden="true">' + esc(item.icon || '·') + '</span>' +
           '<span class="nav-text"><span class="nav-label">' + esc(item.label) + '</span>' +
@@ -691,13 +787,7 @@
 
   function updateNavActive() {
     $$('#sideNav .nav-item').forEach(function (button) {
-      var isConfig = button.dataset.nav === 'config';
-      var active = false;
-      if (isConfig) {
-        active = state.tab === 'config' && (button.dataset.configSection || '') === (state.configSection || '');
-      } else {
-        active = button.dataset.nav === state.tab;
-      }
+      var active = button.dataset.nav === state.tab;
       button.classList.toggle('is-active', active);
       button.setAttribute('aria-current', active ? 'page' : 'false');
     });
@@ -735,15 +825,21 @@
     } catch (err) {
       tab = 'overview';
     }
+    var legacy = LEGACY_ROUTES[tab];
+    if (legacy) {
+      var mapped = legacy[section] || legacy[''];
+      tab = mapped[0];
+      section = mapped[1];
+    }
     if (!PAGE_META[tab]) tab = 'overview';
-    if (tab !== 'config') section = '';
+    section = normalizeSubtab(tab, section);
     return { tab: tab, section: section };
   }
 
   function navigate(tab, options) {
     var opts = options || {};
     var targetTab = PAGE_META[tab] ? tab : 'overview';
-    var section = targetTab === 'config' && typeof opts.section === 'string' ? opts.section : '';
+    var section = normalizeSubtab(targetTab, typeof opts.section === 'string' ? opts.section : '');
     var hash = '#/' + targetTab + (section ? '/' + encodeURIComponent(section) : '');
     if (window.location.hash !== hash) {
       window.location.hash = hash;
@@ -757,20 +853,43 @@
     activateTab(route.tab, { section: route.section });
   }
 
+  function pageTabLabel(tab, subtab) {
+    var tabs = PAGE_TABS[tab];
+    if (!tabs) return '';
+    for (var i = 0; i < tabs.length; i += 1) {
+      if (tabs[i].key === subtab) return tabs[i].label;
+    }
+    return '';
+  }
+
+  function renderPageTabs(tab) {
+    var container = document.getElementById('tabs-' + tab);
+    var tabs = PAGE_TABS[tab];
+    if (!container || !tabs) return;
+    container.innerHTML = tabs.map(function (entry) {
+      var active = entry.key === state.subtab;
+      return (
+        '<button type="button" class="page-tab' + (active ? ' is-active' : '') + '" role="tab" aria-selected="' + active +
+        '" data-subtab="' + esc(entry.key) + '">' + esc(entry.label) + '</button>'
+      );
+    }).join('');
+  }
+
+  function updateSubPanels(tab, subtab) {
+    var panel = document.getElementById('panel-' + tab);
+    if (!panel) return;
+    $$('.sub-panel[data-subtab]', panel).forEach(function (node) {
+      node.classList.toggle('is-active', node.dataset.subtab === subtab);
+    });
+  }
+
   function renderCrumb() {
     var meta = PAGE_META[state.tab] || PAGE_META.overview;
-    var group = meta.group;
-    var title = meta.title;
-    if (state.tab === 'config' && state.configSection !== '') {
-      var section = findConfigSection(state.configSection);
-      if (section) {
-        group = '配置';
-        title = section.title;
-      }
-    }
+    var label = pageTabLabel(state.tab, state.subtab);
+    var title = label === '' ? meta.title : meta.title + ' / ' + label;
     var groupEl = $('#crumbGroup');
     var pageEl = $('#crumbPage');
-    if (groupEl) groupEl.textContent = group;
+    if (groupEl) groupEl.textContent = meta.group;
     if (pageEl) pageEl.textContent = title;
     try {
       document.title = title + ' · QQ Bot 控制台';
@@ -789,34 +908,44 @@
   function activateTab(tab, options) {
     if (TAB_NAMES.indexOf(tab) < 0) tab = 'overview';
     var opts = options || {};
-    var section = tab === 'config' && typeof opts.section === 'string' ? opts.section : '';
+    var subtab = normalizeSubtab(tab, typeof opts.section === 'string' ? opts.section : '');
     state.tab = tab;
-    state.configSection = section;
+    state.subtab = subtab;
     $$('.panel').forEach(function (panel) {
       panel.classList.toggle('is-active', panel.id === 'panel-' + tab);
     });
+    renderPageTabs(tab);
+    updateSubPanels(tab, subtab);
     updateNavActive();
     renderCrumb();
     if (window.innerWidth <= 900) setSidebarOpen(false);
     handle(function () {
-      return loadTabNow(tab, { force: opts.force === true, section: section });
+      return loadTabNow(tab, { force: opts.force === true, subtab: subtab });
     });
+  }
+
+  function ensureConfigLoaded(force) {
+    if (state.configLoaded && force !== true) return Promise.resolve(state.config);
+    return loadConfig({ force: force === true });
   }
 
   function loadTabNow(tab, options) {
     var opts = options || {};
+    var subtab = opts.subtab || state.subtab;
     switch (tab) {
       case 'overview':
         return refreshSnapshot();
-      case 'output':
-        return loadOutputPage({ force: opts.force === true });
-      case 'config':
-        return loadConfig({ force: opts.force === true }).then(function () {
-          if (state.tab === 'config' && state.configSection !== '') focusConfigSection(state.configSection);
-        });
+      case 'dialog':
+      case 'system':
+        return ensureConfigLoaded(opts.force === true);
+      case 'multimodal':
+        if (subtab === 'output') return loadOutputPage({ force: opts.force === true });
+        return ensureConfigLoaded(opts.force === true);
       case 'stickers':
+        if (subtab === 'settings') return ensureConfigLoaded(opts.force === true);
         return refreshStickerData();
       case 'budget':
+        if (subtab === 'settings') return ensureConfigLoaded(opts.force === true);
         return loadBudget();
       case 'chats':
         return loadChats().then(function () {
@@ -1237,15 +1366,23 @@
     },
     {
       key: 'commands',
-      group: '系统',
+      group: '对话',
       page: 'config',
-      title: '命令与管理员',
-      hint: '命令前缀默认 #，同时兼容 /；管理员可使用管理命令。',
+      title: '命令与权限',
+      hint: '命令前缀默认 #，同时兼容 /；管理员可使用管理命令。管理员身份支持 user_openid / member_openid / union_openid。',
       fields: [
         { path: 'commands.enabled', label: '启用聊天命令', type: 'bool' },
         { path: 'commands.prefix', label: '命令前缀', type: 'text' },
         { path: 'commands.adminOpenids', label: '管理员 openid', type: 'list', wide: true, rows: 3, hint: '每行一个；user_openid / member_openid / union_openid 均可，QQ 里发 #我的id 可查看当前账号标识' },
-        { path: 'commands.allowGroupOwner', label: '允许群主 / 管理员使用管理命令', type: 'bool' },
+        { path: 'commands.allowGroupOwner', label: '允许群主 / 管理员使用管理命令', type: 'bool' }
+      ]
+    },
+    {
+      key: 'admin',
+      group: '系统',
+      page: 'config',
+      title: '管理后台',
+      fields: [
         { path: 'admin.enabled', label: '启用管理后台', type: 'bool', hint: '关闭后本页面接口将不可用' },
         { path: 'admin.path', label: '管理页路径', type: 'text', hint: '站内路径，例如 /qqbot；修改后需重新加载插件才会生效' },
         { path: 'admin.pageSize', label: '管理页每页数量', type: 'number', min: 10, max: 500 }
@@ -1255,7 +1392,7 @@
       key: 'logging',
       group: '系统',
       page: 'config',
-      title: '系统与日志',
+      title: '日志与调试',
       fields: [
         { path: 'logging.maxLines', label: '日志保留行数', type: 'number', min: 50, max: 5000 },
         { path: 'logging.debug', label: '调试日志', type: 'bool' }
@@ -1603,62 +1740,42 @@
     }).join('');
   }
 
-  function renderConfigNav() {
-    var nav = $('#configNav');
-    if (!nav) return;
-    var groups = [];
-    var byGroup = Object.create(null);
-    configSections('config').forEach(function (section) {
-      var group = section.group || '其它';
-      if (byGroup[group] === undefined) {
-        byGroup[group] = [];
-        groups.push(group);
-      }
-      byGroup[group].push(section);
-    });
-    nav.innerHTML = groups.map(function (group) {
-      var items = byGroup[group].map(function (section) {
-        return (
-          '<button type="button" class="config-nav-item" data-config-jump="' + esc(section.key) + '" title="跳到「' + esc(section.title) + '」">' +
-          '<span>' + esc(section.title) + '</span><span class="config-nav-badge">' + section.fields.length + '</span></button>'
-        );
-      }).join('');
-      return '<div class="config-nav-group"><div class="config-nav-title">' + esc(group) + '</div>' + items + '</div>';
-    }).join('');
-    updateConfigNavActive(state.configSection);
+  function sectionsByKeys(keys) {
+    return (Array.isArray(keys) ? keys : []).map(function (key) {
+      return findConfigSection(key);
+    }).filter(Boolean);
   }
 
-  function updateConfigNavActive(key) {
-    $$('#configNav [data-config-jump]').forEach(function (button) {
-      button.classList.toggle('is-active', button.dataset.configJump === key);
-    });
+  function renderSettingsWarningsFor(root) {
+    if (!root) return;
+    var target = $('[data-config-warnings]', root);
+    renderConfigWarnings(target, state.configWarnings);
   }
 
-  function focusConfigSection(key) {
-    if (!key) return;
-    var section = findConfigSection(key);
-    if (!section) return;
-    var target = document.getElementById('cfg-' + key);
-    if (!target) return;
-    try {
-      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    } catch (err) {
-      target.scrollIntoView();
+  function renderSettingsForm(containerId, sectionKeys) {
+    var container = document.getElementById(containerId);
+    if (!container) return;
+    var sections = sectionsByKeys(sectionKeys);
+    if (sections.length === 0) {
+      container.innerHTML = '';
+      return;
     }
-    target.classList.add('is-target');
-    window.setTimeout(function () {
-      target.classList.remove('is-target');
-    }, 1800);
-    updateConfigNavActive(key);
+    container.innerHTML =
+      '<div class="settings-toolbar">' +
+        '<input class="input input-sm config-search" type="search" autocomplete="off" data-config-search="' + esc(containerId) + '" placeholder="搜索本页设置项 / 键名" />' +
+        '<span class="muted small" data-config-count="' + esc(containerId) + '"></span>' +
+        '<button type="button" class="btn btn-primary btn-sm" data-save-config="' + esc(containerId) + '">保存设置</button>' +
+      '</div>' +
+      '<ul class="warning-list" data-config-warnings="' + esc(containerId) + '"></ul>' +
+      '<div data-config-root="' + esc(containerId) + '">' + renderConfigSections(sections, state.config || {}) + '</div>';
+    refreshConditionalFields(container);
+    renderSettingsWarningsFor(container);
   }
 
-  function renderConfigForm() {
-    var form = $('#configForm');
-    if (!form) return;
-    var config = state.config || {};
-    form.innerHTML = renderConfigSections(configSections('config'), config);
-    renderConfigNav();
-    refreshConditionalFields(form);
+  function renderAllSettingsForms() {
+    SETTINGS_FORMS.forEach(function (form) {
+      renderSettingsForm(form.container, form.sections);
+    });
   }
 
   function renderOutputConfig() {
@@ -1720,16 +1837,18 @@
     });
   }
 
-  function filterConfigFields(query) {
-    var form = $('#configForm');
-    if (!form) return;
+  function filterSettingsFields(containerId, query) {
+    var container = document.getElementById(containerId);
+    if (!container) return { fields: 0, sections: 0 };
+    var root = $('[data-config-root]', container);
+    if (!root) return { fields: 0, sections: 0 };
     var needle = String(query || '').trim().toLowerCase();
     var visibleFields = 0;
     var visibleSections = 0;
-    $$('.form-section', form).forEach(function (section) {
+    $$('.form-section', root).forEach(function (section) {
       var sectionVisible = 0;
       $$('.field, .check-field', section).forEach(function (field) {
-        var conditionOk = isConditionVisible(field, form);
+        var conditionOk = isConditionVisible(field, root);
         var match = conditionOk && (needle === '' || String(field.dataset.search || '').indexOf(needle) >= 0);
         field.dataset.searchHidden = !match ? '1' : '0';
         field.hidden = !match;
@@ -1741,20 +1860,15 @@
         visibleFields += sectionVisible;
       }
     });
-    var countEl = $('#configSearchCount');
+    var countEl = $('[data-config-count="' + containerId + '"]', container);
     if (countEl) countEl.textContent = needle === '' ? '' : '匹配 ' + visibleFields + ' 项';
-    $$('#configNav [data-config-jump]').forEach(function (button) {
-      var section = document.getElementById('cfg-' + button.dataset.configJump);
-      button.classList.toggle('is-muted', !!(section && section.hidden));
-    });
     return { fields: visibleFields, sections: visibleSections };
   }
 
   async function loadConfig(options) {
     var opts = options || {};
     if (state.configLoaded && opts.force !== true) {
-      renderConfigForm();
-      renderConfigWarnings($('#configWarnings'), state.configWarnings);
+      renderAllSettingsForms();
       renderOutputConfig();
       renderOutputWarnings();
       return state.config;
@@ -1764,8 +1878,7 @@
     state.config = config;
     state.configWarnings = result && Array.isArray(result.warnings) ? result.warnings : [];
     state.configLoaded = true;
-    renderConfigForm();
-    renderConfigWarnings($('#configWarnings'), state.configWarnings);
+    renderAllSettingsForms();
     renderOutputConfig();
     renderOutputWarnings();
     return config;
@@ -1810,10 +1923,6 @@
     return patch;
   }
 
-  function collectConfigPatch() {
-    return collectConfigPatchFrom($('#configForm'));
-  }
-
   function renderOutputWarnings() {
     var target = $('#outputWarnings');
     if (!target) return;
@@ -1823,18 +1932,20 @@
     renderConfigWarnings(target, warnings, '多模态输出没有配置警告');
   }
 
-  function saveConfig() {
-    return withLoading($('#btnConfigSave'), async function () {
-      var patch = collectConfigPatch();
+  function saveSettingsFrom(containerId) {
+    var button = $('[data-save-config="' + containerId + '"]');
+    return withLoading(button, async function () {
+      var root = $('[data-config-root="' + containerId + '"]');
+      if (!root) throw new Error('设置表单尚未加载');
+      var patch = collectConfigPatchFrom(root);
       var result = await api('config.save', { patch: patch });
       if (result && result.config && typeof result.config === 'object') state.config = result.config;
       state.configLoaded = true;
       state.configWarnings = result && Array.isArray(result.warnings) ? result.warnings : [];
-      renderConfigForm();
+      renderAllSettingsForms();
       renderOutputConfig();
-      renderConfigWarnings($('#configWarnings'), state.configWarnings);
       renderOutputWarnings();
-      toast('配置已保存，QQ 连接将按新配置重启', 'success');
+      toast('设置已保存，QQ 连接将按新配置重启', 'success');
       window.setTimeout(function () {
         refreshSnapshot({ silent: true }).catch(function () {});
       }, 1200);
@@ -2185,7 +2296,7 @@
     var opts = options || {};
     state.output.loading = true;
     try {
-      await loadConfig({ force: opts.force === true });
+      await ensureConfigLoaded(opts.force === true);
       var results = await Promise.allSettled([
         api('output.status'),
         api('output.history', { limit: 30, offset: 0 }),
@@ -2242,7 +2353,7 @@
       state.configWarnings = result && Array.isArray(result.warnings) ? result.warnings : [];
       renderOutputConfig();
       renderOutputWarnings();
-      if (state.tab === 'config') renderConfigWarnings($('#configWarnings'), state.configWarnings);
+      renderAllSettingsForms();
       toast('多模态输出接口配置已保存', 'success');
       await loadOutputLibrary();
       refreshSnapshot({ silent: true }).catch(function () {});
@@ -3614,12 +3725,13 @@
         return;
       }
       var active = document.activeElement;
-      if (active && (active.id === 'navSearch' || active.id === 'configSearch')) {
+      if (active && (active.id === 'navSearch' || active.dataset.configSearch)) {
         active.value = '';
         if (active.id === 'navSearch') filterSideNav('');
         else {
-          filterConfigFields('');
-          var count = $('#configSearchCount');
+          var containerId = active.dataset.configSearch;
+          filterSettingsFields(containerId, '');
+          var count = $('[data-config-count="' + containerId + '"]');
           if (count) count.textContent = '';
         }
         active.blur();
@@ -3637,7 +3749,7 @@
         if (!(target instanceof Element)) return;
         var button = target.closest('.nav-item');
         if (!button) return;
-        navigate(button.dataset.nav, { section: button.dataset.configSection || '' });
+        navigate(button.dataset.nav, {});
       });
     }
     on(
@@ -3651,6 +3763,18 @@
     document.addEventListener('click', function (event) {
       var target = event.target;
       if (!(target instanceof Element)) return;
+      var pageTab = target.closest('.page-tab[data-subtab]');
+      if (pageTab) {
+        navigate(state.tab, { section: pageTab.dataset.subtab });
+        return;
+      }
+      var saveButton = target.closest('[data-save-config]');
+      if (saveButton) {
+        handle(function () {
+          return saveSettingsFrom(saveButton.dataset.saveConfig);
+        });
+        return;
+      }
       var link = target.closest('[data-nav-link]');
       if (!link) return;
       event.preventDefault();
@@ -3873,55 +3997,28 @@
     });
   }
 
-  function bindConfig() {
-    on('#btnConfigSave', 'click', function () {
-      handle(saveConfig);
-    });
-    on('#btnConfigRefresh', 'click', function () {
-      var button = $('#btnConfigRefresh');
-      handle(function () {
-        return withLoading(button, async function () {
-          await loadConfig({ force: true });
-          if (state.configSection) focusConfigSection(state.configSection);
-          toast('已重新读取配置', 'success');
-        }, '读取中…');
-      });
-    });
-    on(
-      '#configSearch',
-      'input',
-      debounce(function () {
-        var input = $('#configSearch');
-        filterConfigFields(input ? input.value : '');
-      }, 120)
-    );
-    on('#configNav', 'click', function (event) {
+  function bindSettings() {
+    var searchTimer = 0;
+    document.addEventListener('input', function (event) {
       var target = event.target;
       if (!(target instanceof Element)) return;
-      var button = target.closest('[data-config-jump]');
-      if (!button) return;
-      var search = $('#configSearch');
-      if (search && String(search.value || '') !== '') {
-        search.value = '';
-        filterConfigFields('');
-        var count = $('#configSearchCount');
-        if (count) count.textContent = '';
+      if (target.matches('[data-config-search]')) {
+        var containerId = target.dataset.configSearch;
+        var value = target.value;
+        window.clearTimeout(searchTimer);
+        searchTimer = window.setTimeout(function () {
+          filterSettingsFields(containerId, value);
+        }, 120);
       }
-      navigate('config', { section: button.dataset.configJump || '' });
+      var container = target.closest('.settings-form');
+      if (container) refreshConditionalFields(container);
     });
-    var form = $('#configForm');
-    if (form) {
-      form.addEventListener('submit', function (event) {
-        event.preventDefault();
-        handle(saveConfig);
-      });
-      form.addEventListener('change', function () {
-        refreshConditionalFields(form);
-      });
-      form.addEventListener('input', function () {
-        refreshConditionalFields(form);
-      });
-    }
+    document.addEventListener('change', function (event) {
+      var target = event.target;
+      if (!(target instanceof Element)) return;
+      var container = target.closest('.settings-form');
+      if (container) refreshConditionalFields(container);
+    });
   }
 
   function bindStickers() {
@@ -4241,7 +4338,7 @@
     renderSideNav();
     bindNavigation();
     bindOverview();
-    bindConfig();
+    bindSettings();
     bindOutput();
     bindStickers();
     bindBudget();
@@ -4249,6 +4346,9 @@
     bindPeople();
     bindLogs();
     renderOverview();
+    // Hydrate the sidebar status/data-dir even when the first route is not the
+    // overview (e.g. a bookmarked #/dialog/persona deep link).
+    refreshSnapshot({ silent: true }).catch(function () {});
     applyLocation();
     state.pollTimer = window.setInterval(function () {
       if (document.hidden) return;

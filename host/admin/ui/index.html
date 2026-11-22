@@ -60,7 +60,7 @@
       </div>
       <label class="nav-search-wrap">
         <span class="nav-search-icon" aria-hidden="true">⌕</span>
-        <input id="navSearch" class="input input-sm nav-search" type="search" placeholder="搜索功能 / 配置（Ctrl+K）" autocomplete="off" />
+        <input id="navSearch" class="input input-sm nav-search" type="search" placeholder="搜索功能 / 页面（Ctrl+K）" autocomplete="off" />
       </label>
       <nav id="sideNav" class="side-nav" aria-label="模块列表"></nav>
       <div id="navEmpty" class="nav-empty" hidden>没有匹配的功能</div>
@@ -124,105 +124,111 @@
           </div>
         </section>
 
-        <!-- ============ 多模态输出 ============ -->
-        <section id="panel-output" class="panel" role="tabpanel" aria-label="多模态输出">
+        <!-- ============ 对话 ============ -->
+        <section id="panel-dialog" class="panel" role="tabpanel" aria-label="对话">
           <div class="panel-head">
             <div>
-              <h2>多模态输出</h2>
-              <p class="panel-desc">通过第三方 API 生成图片 / 语音 / 视频：先在这里配置接口，再试跑并管理作品。生成内容可在 QQ 聊天中用 <code>#画</code> / <code>#语音</code> / <code>#视频</code> 调用。</p>
-            </div>
-            <div class="panel-actions">
-              <button id="btnOutputRefresh" class="btn" type="button">刷新</button>
-              <button id="btnOutputSave" class="btn btn-primary" type="button">保存接口配置</button>
+              <h2>对话</h2>
+              <p class="panel-desc">机器人的人格、模型、记忆与命令权限都在这里；每个子标签只负责一类设置，保存时只提交当前页。</p>
             </div>
           </div>
-          <ul id="outputWarnings" class="warning-list"></ul>
-          <div id="outputCards" class="card-grid"></div>
-          <div class="output-grid">
-            <div class="output-config-col">
-              <div class="section-heading-row">
-                <h3 class="section-heading">接口配置</h3>
-                <span class="muted small">每类接口可独立使用不同服务商；API Key 只写不读。</span>
-              </div>
-              <div id="outputConfig"></div>
+          <div id="tabs-dialog" class="page-tabs" role="tablist" aria-label="对话设置分区"></div>
+          <section class="sub-panel is-active" data-subtab="persona">
+            <div id="settings-dialog-persona" class="settings-form"></div>
+          </section>
+          <section class="sub-panel" data-subtab="model">
+            <div id="settings-dialog-model" class="settings-form"></div>
+          </section>
+          <section class="sub-panel" data-subtab="memory">
+            <div id="settings-dialog-memory" class="settings-form"></div>
+          </section>
+          <section class="sub-panel" data-subtab="commands">
+            <div class="notice-card compact-notice">
+              <div>管理员 openid 支持 <code>user_openid</code> / <code>member_openid</code> / <code>union_openid</code>；在 QQ 里发 <code>#我的id</code> 可查看当前账号标识。</div>
             </div>
-            <aside class="output-side-col">
-              <div class="card playground-card">
-                <h3 class="card-title">生成试跑</h3>
-                <p class="muted small">会实际调用第三方接口并产生费用，请确认配置后再试；提示词命中角色名 / 触发词时会自动带入角色参考图。</p>
-                <div id="outputKindTabs" class="segmented" role="tablist" aria-label="生成类型"></div>
-                <label class="field">
-                  <span class="field-label">提示词 / 朗读文本</span>
-                  <textarea id="outputPrompt" rows="4" placeholder="例如：一只在窗台上晒太阳的橘猫，水彩风格"></textarea>
-                </label>
-                <div class="row-actions">
-                  <button id="btnOutputGenerate" class="btn btn-primary" type="button">开始生成</button>
-                  <span id="outputGenerateStatus" class="muted small" aria-live="polite"></span>
-                </div>
-                <div id="outputResult" class="output-result"></div>
-              </div>
-              <div class="card">
-                <h3 class="card-title">聊天内用法</h3>
-                <ul class="usage-list">
-                  <li><code>#画 一只橘猫</code> 生成并发送图片</li>
-                  <li><code>#语音 晚安，好梦</code> 生成并发送语音</li>
-                  <li><code>#视频 海边日落</code> 生成并发送视频</li>
-                </ul>
-                <p class="muted small">默认仅管理员可用；权限、是否发送到 QQ、模型主动调用开关都在下方「输出总开关」里调整。</p>
-              </div>
-            </aside>
-          </div>
-          <div class="card output-history-card">
-            <div class="output-history-head">
-              <div>
-                <h3 class="card-title">最近生成</h3>
-                <p class="muted small">作品保存在插件 data/outputs/，可按保留策略自动清理。</p>
-              </div>
-              <div class="panel-actions">
-                <button id="btnOutputHistoryRefresh" class="btn btn-sm" type="button">刷新</button>
-                <button id="btnOutputClear" class="btn btn-sm btn-danger-ghost" type="button">清空作品库</button>
-              </div>
-            </div>
-            <div id="outputHistory" class="output-history-grid"></div>
-            <div class="center">
-              <button id="btnOutputMore" class="btn" type="button" hidden>加载更多</button>
-            </div>
-          </div>
+            <div id="settings-dialog-commands" class="settings-form"></div>
+          </section>
         </section>
 
-        <!-- ============ 配置 ============ -->
-        <section id="panel-config" class="panel" role="tabpanel" aria-label="配置">
+        <!-- ============ 多模态 ============ -->
+        <section id="panel-multimodal" class="panel" role="tabpanel" aria-label="多模态">
           <div class="panel-head">
             <div>
-              <h2>配置</h2>
-              <p class="panel-desc">按分区查找和修改配置；保存后写入 data/config.json，QQ 连接会按新配置自动重启。</p>
-            </div>
-            <div class="panel-actions">
-              <button id="btnConfigRefresh" class="btn" type="button">重新读取</button>
-              <button id="btnConfigSave" class="btn btn-primary" type="button">保存配置</button>
+              <h2>多模态</h2>
+              <p class="panel-desc">输入识别与输出生成放在同一个功能模块里：识别负责“看懂入站媒体”，输出负责“生成图片 / 语音 / 视频”，两者不再分散在配置页和独立路由。</p>
             </div>
           </div>
-          <div class="config-layout">
-            <aside class="config-side">
-              <div class="config-side-head">
-                <span>配置分区</span>
-                <span id="configSearchCount" class="muted small"></span>
+          <div id="tabs-multimodal" class="page-tabs" role="tablist" aria-label="多模态分区"></div>
+          <section class="sub-panel is-active" data-subtab="input">
+            <div class="notice-card compact-notice">
+              <div><strong>多模态识别（输入）</strong>：图片 / 语音 / 视频先转成文字描述，再注入对话上下文。没有配置时只使用媒体占位标记，不影响聊天。</div>
+            </div>
+            <div id="settings-multimodal-input" class="settings-form"></div>
+          </section>
+          <section class="sub-panel" data-subtab="output">
+            <div class="panel-toolbar output-toolbar">
+              <div>
+                <strong>多模态输出（图片 / 语音 / 视频）</strong>
+                <p class="muted small">接口配置、角色参考图、生成试跑与作品库都在这个子标签内。</p>
               </div>
-              <input id="configSearch" class="input input-sm config-search" type="search" placeholder="搜索配置项 / 键名" autocomplete="off" />
-              <nav id="configNav" class="config-nav" aria-label="配置分区"></nav>
-            </aside>
-            <div class="config-body">
-              <ul id="configWarnings" class="warning-list"></ul>
-              <form id="configForm" class="config-form" autocomplete="off"></form>
-              <div class="notice-card">
-                <div>
-                  <strong>多模态输出的接口配置</strong>已独立到「多模态输出」页面（图片 / 语音 / 视频各自的 API、模型与试跑）。
+              <div class="panel-actions">
+                <button id="btnOutputRefresh" class="btn" type="button">刷新</button>
+                <button id="btnOutputSave" class="btn btn-primary" type="button">保存接口配置</button>
+              </div>
+            </div>
+            <ul id="outputWarnings" class="warning-list"></ul>
+            <div id="outputCards" class="card-grid"></div>
+            <div class="output-grid">
+              <div class="output-config-col">
+                <div class="section-heading-row">
+                  <h3 class="section-heading">接口配置</h3>
+                  <span class="muted small">每类接口可独立使用不同服务商；API Key 只写不读。</span>
                 </div>
-                <button type="button" class="btn btn-sm" data-nav-link="output">前往多模态输出</button>
+                <div id="outputConfig"></div>
               </div>
-              <p class="hint">提示：AppSecret 与多模态 API Key 只显示掩码，输入框留空表示不修改；留空或非法的数值会被插件回退为默认值。</p>
+              <aside class="output-side-col">
+                <div class="card playground-card">
+                  <h3 class="card-title">生成试跑</h3>
+                  <p class="muted small">会实际调用第三方接口并产生费用；提示词命中角色名 / 触发词时会自动带入角色参考图。</p>
+                  <div id="outputKindTabs" class="segmented" role="tablist" aria-label="生成类型"></div>
+                  <label class="field">
+                    <span class="field-label">提示词 / 朗读文本</span>
+                    <textarea id="outputPrompt" rows="4" placeholder="例如：一只在窗台上晒太阳的橘猫，水彩风格"></textarea>
+                  </label>
+                  <div class="row-actions">
+                    <button id="btnOutputGenerate" class="btn btn-primary" type="button">开始生成</button>
+                    <span id="outputGenerateStatus" class="muted small" aria-live="polite"></span>
+                  </div>
+                  <div id="outputResult" class="output-result"></div>
+                </div>
+                <div class="card">
+                  <h3 class="card-title">聊天内用法</h3>
+                  <ul class="usage-list">
+                    <li><code>#画 一只橘猫</code> 生成并发送图片</li>
+                    <li><code>#语音 晚安，好梦</code> 生成并发送语音</li>
+                    <li><code>#视频 海边日落</code> 生成并发送视频</li>
+                  </ul>
+                  <p class="muted small">默认仅管理员可用；权限在「对话 → 命令与权限」，总开关在下方「输出总开关」里调整。</p>
+                </div>
+              </aside>
             </div>
-          </div>
+            <div class="card output-history-card">
+              <div class="output-history-head">
+                <div>
+                  <h3 class="card-title">最近生成</h3>
+                  <p class="muted small">作品保存在插件 data/outputs/，可按保留策略自动清理。</p>
+                </div>
+                <div class="panel-actions">
+                  <button id="btnOutputHistoryRefresh" class="btn btn-sm" type="button">刷新</button>
+                  <button id="btnOutputClear" class="btn btn-sm btn-danger-ghost" type="button">清空作品库</button>
+                </div>
+              </div>
+              <div id="outputHistory" class="output-history-grid"></div>
+              <div class="center">
+                <button id="btnOutputMore" class="btn" type="button" hidden>加载更多</button>
+              </div>
+            </div>
+          </section>
         </section>
 
         <!-- ============ 表情包 ============ -->
@@ -230,46 +236,53 @@
           <div class="panel-head">
             <div>
               <h2>表情包</h2>
-              <p class="panel-desc">上传或扫描导入图片，管理标签与图层；正式库的表情包才会被用于聊天回复。</p>
+              <p class="panel-desc">图库导入、打标、图层与表情包行为设置都在同一页，不再把“导入”和“配置”拆到两个路由。</p>
             </div>
-            <div class="panel-actions">
+          </div>
+          <div id="tabs-stickers" class="page-tabs" role="tablist" aria-label="表情包分区"></div>
+          <section class="sub-panel is-active" data-subtab="library">
+            <div class="panel-toolbar">
+              <div id="stickerLayerTabs" class="segmented" role="tablist" aria-label="图层筛选"></div>
+              <label class="check-inline"><input id="stickerSelectAll" type="checkbox" /><span>全选本页</span></label>
+              <span id="stickerCount" class="muted toolbar-meta"></span>
+            </div>
+            <div class="panel-toolbar">
+              <input id="stickerSearch" class="input search-input" type="search" placeholder="搜索标签 / 描述 / id（回车搜索）" autocomplete="off" />
               <button id="btnStickerRefresh" class="btn" type="button">刷新</button>
               <button id="btnStickerUpload" class="btn btn-primary" type="button">上传图片</button>
               <button id="btnStickerScan" class="btn" type="button">扫描 import 目录</button>
               <input id="stickerFileInput" class="hidden-input" type="file" accept="image/*" multiple aria-hidden="true" />
             </div>
-          </div>
-          <div class="panel-toolbar">
-            <div id="stickerLayerTabs" class="segmented" role="tablist" aria-label="图层筛选"></div>
-            <label class="check-inline"><input id="stickerSelectAll" type="checkbox" /><span>全选本页</span></label>
-            <span id="stickerCount" class="muted toolbar-meta"></span>
-          </div>
-          <div class="panel-toolbar">
-            <input id="stickerSearch" class="input search-input" type="search" placeholder="搜索标签 / 描述 / id（回车搜索）" autocomplete="off" />
-          </div>
-          <div id="stickerTagChips" class="chip-row tag-filter"></div>
-          <div id="stickerBulkBar" class="bulkbar" hidden>
-            <span id="bulkCount" class="bulk-count">已选 0 项</span>
-            <input id="bulkAddTags" class="input input-sm" type="text" placeholder="添加标签，逗号分隔" />
-            <button id="btnBulkAddTags" class="btn btn-sm" type="button">加标签</button>
-            <input id="bulkRemoveTags" class="input input-sm" type="text" placeholder="移除标签，逗号分隔" />
-            <button id="btnBulkRemoveTags" class="btn btn-sm" type="button">移除标签</button>
-            <select id="bulkLayer" class="input input-sm" aria-label="批量修改图层">
-              <option value="">改图层…</option>
-              <option value="library">正式库</option>
-              <option value="candidate">候选</option>
-              <option value="negative">负面</option>
-              <option value="trash">回收站</option>
-            </select>
-            <button id="btnBulkLayerApply" class="btn btn-sm" type="button">应用</button>
-            <button id="btnBulkTrash" class="btn btn-sm" type="button">移入回收站</button>
-            <button id="btnBulkPurge" class="btn btn-sm btn-danger" type="button">彻底删除</button>
-            <button id="btnBulkClear" class="btn btn-sm" type="button">取消选择</button>
-          </div>
-          <div id="stickerGrid" class="sticker-grid"></div>
-          <div class="center">
-            <button id="btnStickerMore" class="btn" type="button" hidden>加载更多</button>
-          </div>
+            <div id="stickerTagChips" class="chip-row tag-filter"></div>
+            <div id="stickerBulkBar" class="bulkbar" hidden>
+              <span id="bulkCount" class="bulk-count">已选 0 项</span>
+              <input id="bulkAddTags" class="input input-sm" type="text" placeholder="添加标签，逗号分隔" />
+              <button id="btnBulkAddTags" class="btn btn-sm" type="button">加标签</button>
+              <input id="bulkRemoveTags" class="input input-sm" type="text" placeholder="移除标签，逗号分隔" />
+              <button id="btnBulkRemoveTags" class="btn btn-sm" type="button">移除标签</button>
+              <select id="bulkLayer" class="input input-sm" aria-label="批量修改图层">
+                <option value="">改图层…</option>
+                <option value="library">正式库</option>
+                <option value="candidate">候选</option>
+                <option value="negative">负面</option>
+                <option value="trash">回收站</option>
+              </select>
+              <button id="btnBulkLayerApply" class="btn btn-sm" type="button">应用</button>
+              <button id="btnBulkTrash" class="btn btn-sm" type="button">移入回收站</button>
+              <button id="btnBulkPurge" class="btn btn-sm btn-danger" type="button">彻底删除</button>
+              <button id="btnBulkClear" class="btn btn-sm" type="button">取消选择</button>
+            </div>
+            <div id="stickerGrid" class="sticker-grid"></div>
+            <div class="center">
+              <button id="btnStickerMore" class="btn" type="button" hidden>加载更多</button>
+            </div>
+          </section>
+          <section class="sub-panel" data-subtab="settings">
+            <div class="notice-card compact-notice">
+              <div>表情包行为设置：启用开关、图层策略、自动抓取、回复概率与提示词标签数量。图库导入与打标在「图库与打标」子标签。</div>
+            </div>
+            <div id="settings-stickers-settings" class="settings-form"></div>
+          </section>
         </section>
 
         <!-- ============ 预算 ============ -->
@@ -277,30 +290,41 @@
           <div class="panel-head">
             <div>
               <h2>预算</h2>
-              <p class="panel-desc">今日 / 本月 token 与费用统计，以及最近调用明细。</p>
-            </div>
-            <div class="panel-actions">
-              <button id="btnBudgetRefresh" class="btn" type="button">刷新</button>
-              <button id="btnBudgetResetToday" class="btn" type="button">重置今日</button>
-              <button id="btnBudgetResetMonth" class="btn" type="button">重置本月</button>
-              <button id="btnBudgetResetAll" class="btn btn-danger-ghost" type="button">全部重置</button>
+              <p class="panel-desc">用量查看和限额设置放在同一页；用量页负责仪表盘与明细，设置页负责限额、单价与拦截文案。</p>
             </div>
           </div>
-          <div id="budgetCards" class="card-grid"></div>
-          <div class="card">
-            <h3 class="card-title">限额使用情况</h3>
-            <div id="budgetLimits" class="limit-list"></div>
-          </div>
-          <div class="two-col">
+          <div id="tabs-budget" class="page-tabs" role="tablist" aria-label="预算分区"></div>
+          <section class="sub-panel is-active" data-subtab="usage">
+            <div class="panel-toolbar">
+              <div class="panel-actions">
+                <button id="btnBudgetRefresh" class="btn" type="button">刷新</button>
+                <button id="btnBudgetResetToday" class="btn" type="button">重置今日</button>
+                <button id="btnBudgetResetMonth" class="btn" type="button">重置本月</button>
+                <button id="btnBudgetResetAll" class="btn btn-danger-ghost" type="button">全部重置</button>
+              </div>
+            </div>
+            <div id="budgetCards" class="card-grid"></div>
             <div class="card">
-              <h3 class="card-title">按会话用量</h3>
-              <div id="budgetChats"></div>
+              <h3 class="card-title">限额使用情况</h3>
+              <div id="budgetLimits" class="limit-list"></div>
             </div>
-            <div class="card">
-              <h3 class="card-title">最近调用</h3>
-              <div id="budgetEvents"></div>
+            <div class="two-col">
+              <div class="card">
+                <h3 class="card-title">按会话用量</h3>
+                <div id="budgetChats"></div>
+              </div>
+              <div class="card">
+                <h3 class="card-title">最近调用</h3>
+                <div id="budgetEvents"></div>
+              </div>
             </div>
-          </div>
+          </section>
+          <section class="sub-panel" data-subtab="settings">
+            <div class="notice-card compact-notice">
+              <div>限额为 0 表示不限制；修改后从下一次模型调用开始生效。</div>
+            </div>
+            <div id="settings-budget-settings" class="settings-form"></div>
+          </section>
         </section>
 
         <!-- ============ 会话 ============ -->
@@ -330,7 +354,7 @@
           <div class="panel-head">
             <div>
               <h2>人员</h2>
-              <p class="panel-desc">记录聊天中出现过的用户画像与长期事实。</p>
+              <p class="panel-desc">记录聊天中出现过的用户画像与长期事实，也可用于查找管理员 openid。</p>
             </div>
             <div class="panel-actions">
               <span id="peopleCount" class="muted"></span>
@@ -342,12 +366,35 @@
           </div>
         </section>
 
-        <!-- ============ 日志 ============ -->
-        <section id="panel-logs" class="panel" role="tabpanel" aria-label="日志">
+        <!-- ============ 系统设置 ============ -->
+        <section id="panel-system" class="panel" role="tabpanel" aria-label="系统设置">
           <div class="panel-head">
             <div>
-              <h2>日志</h2>
-              <p class="panel-desc">插件最近写入的日志（最多 300 条），按时间从旧到新排列。</p>
+              <h2>系统设置</h2>
+              <p class="panel-desc">QQ 接入、管理后台与日志级别集中在这里；聊天命令权限已经移到「对话 → 命令与权限」。</p>
+            </div>
+          </div>
+          <div id="tabs-system" class="page-tabs" role="tablist" aria-label="系统设置分区"></div>
+          <section class="sub-panel is-active" data-subtab="qq">
+            <div id="settings-system-qq" class="settings-form"></div>
+          </section>
+          <section class="sub-panel" data-subtab="admin">
+            <div class="notice-card compact-notice">
+              <div>管理后台入口路径修改后需要重新加载插件才会生效；管理员 openid 在「对话 → 命令与权限」。</div>
+            </div>
+            <div id="settings-system-admin" class="settings-form"></div>
+          </section>
+          <section class="sub-panel" data-subtab="logging">
+            <div id="settings-system-logging" class="settings-form"></div>
+          </section>
+        </section>
+
+        <!-- ============ 运行日志 ============ -->
+        <section id="panel-logs" class="panel" role="tabpanel" aria-label="运行日志">
+          <div class="panel-head">
+            <div>
+              <h2>运行日志</h2>
+              <p class="panel-desc">插件最近写入的日志（最多 300 条），按时间从旧到新排列；日志级别与保留行数在「系统设置 → 日志与调试」。</p>
             </div>
             <div class="panel-actions">
               <select id="logLevel" class="input input-sm" aria-label="日志级别筛选">
