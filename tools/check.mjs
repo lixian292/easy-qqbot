@@ -79,6 +79,7 @@ const required = [
   'host/brain/prompt.js',
   'host/brain/chat.js',
   'host/brain/commands.js',
+  'host/brain/access.js',
   'host/multimodal/download.js',
   'host/multimodal/frames.js',
   'host/multimodal/client.js',

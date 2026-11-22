@@ -694,6 +694,7 @@ test('命令 followUp 发送失败时回一条中文提示', async () => {
 test('模型输出 [[image: ...]] 指令：先回文本，再后台生成并发送媒体', async () => {
   const { engine, qqClient, outputClient, cleanup } = await setup({
     config: {
+      commands: { adminOpenids: ['u1'] },
       output: {
         enabled: true,
         allowModelDirectives: true,
@@ -714,6 +715,64 @@ test('模型输出 [[image: ...]] 指令：先回文本，再后台生成并发�
     assert.equal(outputClient.calls[0].kind, 'image')
     assert.equal(outputClient.calls[0].prompt, '一只在窗台上的橘猫')
     assert.equal(outputClient.calls[0].source.kind, 'model')
+  } finally {
+    await cleanup()
+  }
+})
+
+test('commandAccess=admin 时普通用户触发模型输出指令也不会生成', async () => {
+  const { engine, qqClient, outputClient, cleanup } = await setup({
+    config: {
+      commands: { adminOpenids: ['someone-else'] },
+      output: {
+        enabled: true,
+        commandAccess: 'admin',
+        allowModelDirectives: true,
+        image: { enabled: true, baseUrl: 'https://api.example.com/v1', apiKey: 'k', model: 'm' }
+      }
+    },
+    llm: makeFakeLlm({ reply: '画好啦 [[image: 一只猫]]' }),
+    outputClient: makeOutputClient()
+  })
+  try {
+    await engine.handleInbound(makeInbound())
+    assert.equal(outputClient.calls.length, 0)
+    assert.equal(qqClient.sent.some((item) => item.type === 'media'), false)
+    const text = qqClient.sent.find((item) => item.type === 'text')
+    assert.equal(text.text, '画好啦')
+  } finally {
+    await cleanup()
+  }
+})
+
+test('union_openid 配置为管理员后可以使用模型输出指令', async () => {
+  const { engine, qqClient, outputClient, cleanup } = await setup({
+    config: {
+      commands: { adminOpenids: ['UNION-ADMIN'] },
+      output: {
+        enabled: true,
+        commandAccess: 'admin',
+        allowModelDirectives: true,
+        image: { enabled: true, baseUrl: 'https://api.example.com/v1', apiKey: 'k', model: 'm' }
+      }
+    },
+    llm: makeFakeLlm({ reply: '画好啦 [[image: 一只猫]]' }),
+    outputClient: makeOutputClient()
+  })
+  try {
+    await engine.handleInbound(
+      makeInbound({
+        kind: 'group',
+        chatId: 'group_g1',
+        targetId: 'g1',
+        userId: 'member-1',
+        unionOpenId: 'union-admin',
+        identityIds: ['member-1', 'union-admin'],
+        msgId: 'gm-admin'
+      })
+    )
+    await waitFor(() => qqClient.sent.find((item) => item.type === 'media'))
+    assert.equal(outputClient.calls.length, 1)
   } finally {
     await cleanup()
   }

@@ -9,6 +9,7 @@
 import { parseCommand } from '../util/text.js'
 import { canSendToQQ } from '../output/media.js'
 import { shortMessage } from '../output/errors.js'
+import { canUseOutput, identityIdsOf, isAdmin } from './access.js'
 
 const DEFAULT_PREFIX = '#'
 const MAX_MEMORY_LINES = 10
@@ -51,15 +52,6 @@ export function createCommandHandler({ configStore, budgetStore, memoryStore, st
     return typeof config.commands?.prefix === 'string' && config.commands.prefix !== '' ? config.commands.prefix : DEFAULT_PREFIX
   }
 
-  function isAdmin(inbound, config) {
-    const adminOpenids = Array.isArray(config.commands?.adminOpenids) ? config.commands.adminOpenids : []
-    if (typeof inbound?.userId === 'string' && inbound.userId !== '' && adminOpenids.includes(inbound.userId)) return true
-    if (config.commands?.allowGroupOwner === true && inbound?.kind === 'group') {
-      return inbound.memberRole === 'owner' || inbound.memberRole === 'admin'
-    }
-    return false
-  }
-
   function formatTokens(value) {
     const parsed = Number(value)
     if (!Number.isFinite(parsed) || parsed < 0) return '0'
@@ -80,7 +72,8 @@ export function createCommandHandler({ configStore, budgetStore, memoryStore, st
       `${prefix}预算 — 查看今日 / 本月 / 本会话的用量和费用`,
       `${prefix}表情 <标签…> — 随机发一张标签匹配的表情包`,
       `${prefix}记忆 — 查看本会话记住的长期事实`,
-      `${prefix}清空上下文 — 清空本会话的聊天上下文（长期记忆保留）`
+      `${prefix}清空上下文 — 清空本会话的聊天上下文（长期记忆保留）`,
+      `${prefix}我的id — 查看当前账号的 openid / union_openid（用于管理员配置）`
     ]
     const output = isPlainObject(config?.output) ? config.output : {}
     if (output.enabled === true) {
@@ -249,6 +242,20 @@ export function createCommandHandler({ configStore, budgetStore, memoryStore, st
     return { handled: true, text: lines.join('\n') }
   }
 
+  function identityCommand(inbound, config) {
+    const ids = identityIdsOf(inbound)
+    const lines = ['当前账号标识：']
+    if (inbound?.userId) lines.push(`user_openid / member_openid：${inbound.userId}`)
+    if (inbound?.unionOpenId) lines.push(`union_openid：${inbound.unionOpenId}`)
+    if (inbound?.memberOpenId && inbound.memberOpenId !== inbound.userId) lines.push(`member_openid：${inbound.memberOpenId}`)
+    if (inbound?.authorId && inbound.authorId !== inbound.userId) lines.push(`author.id：${inbound.authorId}`)
+    if (ids.length > 1) lines.push(`全部别名：${ids.join('、')}`)
+    if (inbound?.memberRole) lines.push(`群角色：${inbound.memberRole}`)
+    lines.push(`当前管理员判定：${isAdmin(inbound, config) ? '是' : '否'}`)
+    lines.push('把以上任一 ID 填入控制台「配置 → 命令与管理员 → 管理员 openid」即可。')
+    return { handled: true, text: lines.join('\n') }
+  }
+
   function outputCommand(kind, args, inbound, config) {
     const label = OUTPUT_LABELS[kind]
     const output = isPlainObject(config.output) ? config.output : {}
@@ -259,7 +266,7 @@ export function createCommandHandler({ configStore, budgetStore, memoryStore, st
     if (section.enabled !== true) {
       return { handled: true, text: `${label}输出还没有启用，请联系管理员在控制台「多模态输出」页开启。` }
     }
-    if (output.commandAccess === 'admin' && !isAdmin(inbound, config)) {
+    if (!canUseOutput(inbound, config)) {
       return { handled: true, text: `这个命令目前仅管理员可用（生成${label}会调用第三方接口并产生费用）。` }
     }
     const prompt = String(args ?? '')
@@ -335,6 +342,11 @@ export function createCommandHandler({ configStore, budgetStore, memoryStore, st
         return clearCommand(inbound)
       case '记忆':
         return memoryCommand(inbound)
+      case '我的id':
+      case '我的ID':
+      case 'whoami':
+      case 'id':
+        return identityCommand(inbound, config)
       case '状态':
       case 'status':
         return statusCommand(inbound, config)

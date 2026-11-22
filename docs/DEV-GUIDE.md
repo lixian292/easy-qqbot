@@ -21,7 +21,8 @@
 - `host/util/text.js`：`estimateTokens` `estimateMessagesTokens` `chunkText` `stripMarkdown` `parseStickerDirectives` `normalizeTags` `mergeTags` `parseCommand` `escapeRegExp` `formatDateTime` `formatDate` `formatMonth` `maskSecret` `shortTitle` `isLikelyImageContentType` `clampText`
 - `host/util/log.js`：`createLogger({file, ctxLogger, maxLines, debug})`（模块里只使用注入的 `logger`，不要自己创建）
 - `host/config.js`：`DEFAULT_CONFIG` `normalizeConfig` `patchConfig` `loadConfig` `saveConfig` `publicConfig` `preserveSecret` `hasCredentials`
-- `host/output/`：`createOutputStore({paths, configStore, logger})`、`createOutputClient({configStore, store, logger, fetchImpl})`、`parseOutputDirectives(text)`、`buildOutputInstruction({output})`；协议与错误码见 `docs/INTERFACES.md` §19
+- `host/output/`：`createOutputStore({paths, configStore, logger})`、`createOutputClient({configStore, store, referenceStore, logger, fetchImpl})`、`parseOutputDirectives(text)`、`buildOutputInstruction({output})`；协议与错误码见 `docs/INTERFACES.md` §19
+- `host/brain/access.js`：`identityIdsOf(inbound)`、`isAdmin(inbound, config)`、`canUseOutput(inbound, config)`；管理员匹配同时考虑 member/user/union openid 与 author.id，聊天命令和模型输出指令都必须走这一层。
 
 ## 4. 错误处理
 

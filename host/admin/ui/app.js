@@ -1244,7 +1244,7 @@
       fields: [
         { path: 'commands.enabled', label: '启用聊天命令', type: 'bool' },
         { path: 'commands.prefix', label: '命令前缀', type: 'text' },
-        { path: 'commands.adminOpenids', label: '管理员 openid', type: 'list', wide: true, rows: 3, hint: '每行一个 openid' },
+        { path: 'commands.adminOpenids', label: '管理员 openid', type: 'list', wide: true, rows: 3, hint: '每行一个；user_openid / member_openid / union_openid 均可，QQ 里发 #我的id 可查看当前账号标识' },
         { path: 'commands.allowGroupOwner', label: '允许群主 / 管理员使用管理命令', type: 'bool' },
         { path: 'admin.enabled', label: '启用管理后台', type: 'bool', hint: '关闭后本页面接口将不可用' },
         { path: 'admin.path', label: '管理页路径', type: 'text', hint: '站内路径，例如 /qqbot；修改后需重新加载插件才会生效' },

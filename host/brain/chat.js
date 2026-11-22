@@ -25,6 +25,7 @@ import { classifyAttachment, describeMediaMarker, describeMediaWithText } from '
 import { parseOutputDirectives } from '../output/directives.js'
 import { shortMessage } from '../output/errors.js'
 import { qqFileType } from '../output/media.js'
+import { canUseOutput } from './access.js'
 
 const ERROR_FALLBACK = '我这边刚刚走神了，再说一次？'
 const EMPTY_REPLY_FALLBACK = '嗯嗯～'
@@ -571,7 +572,15 @@ export function createChatEngine({
     // 9.1 Optional model-requested generation runs after the text reply so a
     // slow image/video task never delays the conversation.
     const outputRequest = Array.isArray(outputDirectives.requests) ? outputDirectives.requests[0] : null
-    if (outputRequest && typeof outputClient?.generate === 'function') {
+    const outputAllowed = outputRequest !== null && canUseOutput(inbound, config)
+    if (outputRequest && !outputAllowed) {
+      logger?.debug?.('普通用户触发了多模态输出指令，已忽略', {
+        chatId,
+        kind: outputRequest.kind,
+        commandAccess: outputConfig.commandAccess
+      })
+    }
+    if (outputRequest && outputAllowed && typeof outputClient?.generate === 'function') {
       Promise.resolve()
         .then(async () => {
           const generated = await outputClient.generate({

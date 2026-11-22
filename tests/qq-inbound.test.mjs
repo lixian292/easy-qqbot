@@ -9,7 +9,7 @@ test('C2C_MESSAGE_CREATE 归一化为 InboundMessage', () => {
     id: 'msg-1',
     content: '  你好  ',
     timestamp,
-    author: { user_openid: 'user-openid-1', username: '小明' },
+    author: { user_openid: 'user-openid-1', union_openid: 'union-1', id: 'qq-1', username: '小明' },
     attachments: [
       { url: 'https://cdn.example/a.png', content_type: 'image/png', filename: 'a.png', width: 100, height: 80, size: 1234 },
       { url: '' },
@@ -21,6 +21,9 @@ test('C2C_MESSAGE_CREATE 归一化为 InboundMessage', () => {
   assert.equal(message.chatId, 'c2c_user-openid-1')
   assert.equal(message.targetId, 'user-openid-1')
   assert.equal(message.userId, 'user-openid-1')
+  assert.equal(message.unionOpenId, 'union-1')
+  assert.equal(message.userOpenId, 'user-openid-1')
+  assert.deepEqual(message.identityIds, ['user-openid-1', 'union-1', 'qq-1'])
   assert.equal(message.userName, '小明')
   assert.equal(message.text, '你好')
   assert.equal(message.msgId, 'msg-1')
@@ -41,7 +44,7 @@ test('GROUP_AT_MESSAGE_CREATE 归一化：群字段、成员角色、外层 even
       group_openid: 'group-openid-1',
       content: '在吗',
       timestamp,
-      author: { member_openid: 'member-1', member_role: 'admin', username: '阿强' },
+      author: { member_openid: 'member-1', union_openid: 'union-member-1', id: 'qq-member-1', member_role: 'admin', username: '阿强' },
       attachments: []
     },
     { id: 'event-9' }
@@ -51,6 +54,8 @@ test('GROUP_AT_MESSAGE_CREATE 归一化：群字段、成员角色、外层 even
   assert.equal(message.chatId, 'group_group-openid-1')
   assert.equal(message.targetId, 'group-openid-1')
   assert.equal(message.userId, 'member-1')
+  assert.equal(message.unionOpenId, 'union-member-1')
+  assert.deepEqual(message.identityIds, ['member-1', 'union-member-1', 'qq-member-1'])
   assert.equal(message.memberRole, 'admin')
   assert.equal(message.eventId, 'event-9')
   assert.equal(message.msgId, 'msg-2')

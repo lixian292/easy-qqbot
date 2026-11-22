@@ -94,22 +94,68 @@ function userNameOf(author) {
   return firstString(author.username, author.nick, author.name, author.nickname)
 }
 
+/**
+ * QQ exposes several identifiers for the same human: `member_openid` is
+ * group-scoped, `user_openid` is used in single chats, `union_openid` is
+ * supposed to be stable across scenes, and `id` may be the QQ uin. Admin
+ * matching must consider all of them; an admin who configured the union id
+ * should not be locked out of group commands.
+ */
+function identityFieldsOf(author, primary) {
+  const values = [
+    primary,
+    author.union_openid,
+    author.unionOpenId,
+    author.user_openid,
+    author.userOpenId,
+    author.member_openid,
+    author.memberOpenId,
+    author.id
+  ]
+  const identityIds = []
+  for (const value of values) {
+    const id = firstString(value)
+    if (id !== '' && !identityIds.includes(id)) identityIds.push(id)
+  }
+  return {
+    identityIds,
+    unionOpenId: firstString(author.union_openid, author.unionOpenId),
+    userOpenId: firstString(author.user_openid, author.userOpenId),
+    memberOpenId: firstString(author.member_openid, author.memberOpenId),
+    authorId: firstString(author.id)
+  }
+}
+
+function withIdentityFields(message, author, primary) {
+  const fields = identityFieldsOf(author, primary)
+  message.identityIds = fields.identityIds
+  if (fields.unionOpenId !== '') message.unionOpenId = fields.unionOpenId
+  if (fields.userOpenId !== '') message.userOpenId = fields.userOpenId
+  if (fields.memberOpenId !== '') message.memberOpenId = fields.memberOpenId
+  if (fields.authorId !== '') message.authorId = fields.authorId
+  return message
+}
+
 function normalizeC2C(data, author, eventId) {
   const userId = firstString(author.user_openid, author.id, data.user_openid)
   if (userId === '') return null
   const timestamp = normalizeTimestamp(data.timestamp, Date.now())
   const msgId = firstString(data.id, eventId, `c2c-${timestamp}-${userId}`)
-  const message = {
-    kind: 'c2c',
-    chatId: `c2c_${userId}`,
-    targetId: userId,
-    userId,
-    text: normalizeText(data.content),
-    msgId,
-    timestamp,
-    attachments: normalizeAttachments(data.attachments),
-    rawType: 'C2C_MESSAGE_CREATE'
-  }
+  const message = withIdentityFields(
+    {
+      kind: 'c2c',
+      chatId: `c2c_${userId}`,
+      targetId: userId,
+      userId,
+      text: normalizeText(data.content),
+      msgId,
+      timestamp,
+      attachments: normalizeAttachments(data.attachments),
+      rawType: 'C2C_MESSAGE_CREATE'
+    },
+    author,
+    userId
+  )
   const userName = userNameOf(author)
   if (userName !== '') message.userName = userName
   if (eventId !== '') message.eventId = eventId
@@ -122,17 +168,21 @@ function normalizeGroup(data, author, eventId) {
   if (groupId === '' || userId === '') return null
   const timestamp = normalizeTimestamp(data.timestamp, Date.now())
   const msgId = firstString(data.id, eventId, `group-${timestamp}-${userId}`)
-  const message = {
-    kind: 'group',
-    chatId: `group_${groupId}`,
-    targetId: groupId,
-    userId,
-    text: normalizeText(data.content),
-    msgId,
-    timestamp,
-    attachments: normalizeAttachments(data.attachments),
-    rawType: 'GROUP_AT_MESSAGE_CREATE'
-  }
+  const message = withIdentityFields(
+    {
+      kind: 'group',
+      chatId: `group_${groupId}`,
+      targetId: groupId,
+      userId,
+      text: normalizeText(data.content),
+      msgId,
+      timestamp,
+      attachments: normalizeAttachments(data.attachments),
+      rawType: 'GROUP_AT_MESSAGE_CREATE'
+    },
+    author,
+    userId
+  )
   const userName = userNameOf(author)
   if (userName !== '') message.userName = userName
   if (eventId !== '') message.eventId = eventId

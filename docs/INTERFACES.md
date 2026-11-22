@@ -41,7 +41,12 @@ InboundMessage = {
   timestamp: number,         // ms
   attachments: Attachment[],
   rawType: 'C2C_MESSAGE_CREATE' | 'GROUP_AT_MESSAGE_CREATE',
-  memberRole?: 'member' | 'admin' | 'owner'
+  memberRole?: 'member' | 'admin' | 'owner',
+  identityIds?: string[],      // userId + union_openid / user_openid / member_openid / author.id
+  unionOpenId?: string,
+  userOpenId?: string,
+  memberOpenId?: string,
+  authorId?: string
 }
 
 ChatMessage = {
@@ -230,7 +235,8 @@ export function createCommandHandler({ configStore, budgetStore, memoryStore, st
 - `#表情 <标签...>` / `#sticker <tags>`：从表情包库随机挑选匹配项；无匹配返回提示；返回 `{handled:true, sticker, text?}`。
 - `#清空上下文`：清空本会话历史与摘要（保留长期事实），返回确认文案。
 - `#记忆`：列出本会话长期事实（最多 10 条），无则提示。
-- `#状态` / `#status`：管理员命令（`config.commands.adminOpenids` 包含 userId，或群 `memberRole` 为 owner/admin 且 `allowGroupOwner` 打开），返回连接状态摘要（由 `ctx` 无关的轻量信息组成：预算、会话数、表情包数）。
+- `#状态` / `#status`：管理员命令（`config.commands.adminOpenids` 命中任一 `identityIds`，或群 `memberRole` 为 owner/admin 且 `allowGroupOwner` 打开），返回连接状态摘要（由 `ctx` 无关的轻量信息组成：预算、会话数、表情包数）。
+- `#我的id` / `#whoami`：返回当前账号的 `userId`、`unionOpenId`、`memberOpenId`、`authorId` 等标识，以及当前管理员判定，便于配置管理员 openid。
 - `#表情包统计`：管理员命令，返回各图层数量与标签 TopN。
 - `#画 <描述>` / `#语音 <文本>` / `#视频 <描述>`：多模态输出（需 `output.enabled` 与对应模态启用；`output.commandAccess='admin'` 时仅管理员可用）。先返回回执 `text`，`followUp()` 调 `outputClient.generate()`，成功返回 `{media: record}`，`sendToQQ=false` 或格式不支持时返回 `{text}`。
 - 未知命令返回 `{handled:false}`（交给 LLM 正常回答，避免群里误拦截）。
@@ -265,6 +271,7 @@ export function createChatEngine({
 8. 解析 `parseStickerDirectives(text)`，再解析 `parseOutputDirectives(text)`（始终剥离标记）；清理 Markdown → `stripMarkdown`；截断到 `persona.replyMaxChars`。
 9. 发送：先文字（如果有），再表情包：显式指令优先 `stickerSelector.pickForReply(tags)`；否则按 `stickerChance` 在回复文本命中标签时 `stickerSelector.maybeStickerFromText()`；发送失败降级为纯文字。`output.enabled && output.allowModelDirectives` 时，后台执行第一条 `[[image/voice/video: ...]]` 指令生成并发送，失败只回文字提示。
 10. `memoryStore.appendMessage(chatId, {role:'assistant', content: finalText, ts})`。
+    - 模型输出指令与命令一致受 `canUseOutput(inbound, config)` 约束：`output.commandAccess='admin'` 时普通用户触发的 `[[image/voice/video]]` 会被剥离但不执行。
 11. 异步（不 await，catch 后仅记日志）：`extractor.maybeExtract({ chatId, speaker: { userId, name, isGroup } })`。
 
 ## 10. host/stickers/store.js

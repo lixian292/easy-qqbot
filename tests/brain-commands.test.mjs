@@ -206,6 +206,42 @@ test('#状态 仅管理员可用', async () => {
   assert.ok(admin.text.includes('表情包：5 张'))
 })
 
+test('管理员配置为 union_openid 时也能识别（群聊 / 单聊）', async () => {
+  const { handler } = setup({ config: { commands: { adminOpenids: ['UNION-ADMIN'], allowGroupOwner: false } } })
+  const group = await handler.tryHandle(
+    makeInbound({
+      kind: 'group',
+      chatId: 'group_g1',
+      targetId: 'g1',
+      userId: 'member-1',
+      unionOpenId: 'union-admin',
+      identityIds: ['member-1', 'union-admin'],
+      text: '#状态'
+    })
+  )
+  assert.equal(group.handled, true)
+  assert.ok(group.text.includes('运行状态'), group.text)
+
+  const c2c = await handler.tryHandle(
+    makeInbound({ text: '#状态', userId: 'user-1', unionOpenId: 'union-admin', identityIds: ['user-1', 'union-admin'] })
+  )
+  assert.ok(c2c.text.includes('运行状态'))
+})
+
+test('#我的id 返回当前账号标识与管理员判定', async () => {
+  const { handler } = setup({ config: { commands: { adminOpenids: ['admin1'] } } })
+  const result = await handler.tryHandle(
+    makeInbound({ text: '#我的id', userId: 'member-1', unionOpenId: 'union-1', identityIds: ['member-1', 'union-1'] })
+  )
+  assert.equal(result.handled, true)
+  assert.ok(result.text.includes('member-1'))
+  assert.ok(result.text.includes('union-1'))
+  assert.ok(result.text.includes('当前管理员判定：否'))
+
+  const admin = await handler.tryHandle(makeInbound({ text: '#我的id', userId: 'admin1', identityIds: ['admin1'] }))
+  assert.ok(admin.text.includes('当前管理员判定：是'))
+})
+
 test('群主 / 管理员在 allowGroupOwner 打开时可以执行管理员命令', async () => {
   const { handler } = setup()
   const ownerStatus = await handler.tryHandle(makeInbound({ kind: 'group', chatId: 'group_1', targetId: 'g1', userId: 'u2', memberRole: 'owner', text: '#状态' }))
