@@ -501,6 +501,45 @@ test('character reference auto-triggers on prompt keywords and sends multipart /
   }
 })
 
+test('reference auto-trigger matches pronoun 你 used by #画 selfie commands', async () => {
+  const refStore = await makeReferenceStore()
+  const calls = []
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init })
+    return jsonResponse({ data: [{ b64_json: PNG.toString('base64') }] })
+  }
+  try {
+    const { client, store } = setup({
+      output: {
+        image: {
+          enabled: true,
+          baseUrl: 'https://api.example.com/v1',
+          apiKey: 'k',
+          model: 'img-model',
+          reference: {
+            enabled: true,
+            id: refStore.record.id,
+            trigger: 'auto',
+            keywords: '小蓝,你',
+            requestMode: 'edits',
+            path: '/images/edits',
+            field: 'image'
+          }
+        }
+      },
+      fetchImpl,
+      referenceStore: refStore
+    })
+    const result = await client.generate({ kind: 'image', prompt: '一张你的自拍照' })
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0].url, 'https://api.example.com/v1/images/edits')
+    assert.equal(store.additions[0].referenceId, refStore.record.id)
+    assert.equal(result.record.referenceId, refStore.record.id)
+  } finally {
+    await refStore.cleanup()
+  }
+})
+
 test('reference JSON mode embeds a data URL and skips reference when prompt has no trigger', async () => {
   const refStore = await makeReferenceStore()
   let calls = []
